@@ -1,4 +1,4 @@
-import { SurfaceProfile } from './types';
+import type { SurfaceProfile } from './types';
 
 export const surfaces: Record<string, SurfaceProfile> = {
   'mobile-portrait': {

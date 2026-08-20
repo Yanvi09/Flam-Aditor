@@ -1,4 +1,4 @@
-import { AdSpecification, SurfaceProfile, ResolvedElement, ResolvedLayout, AdElement } from './types';
+import type { AdSpecification, SurfaceProfile, ResolvedElement, ResolvedLayout, AdElement } from './types';
 import { validateAdSpec, validateSurface } from './validation';
 
 interface AvailableSpace {
@@ -132,7 +132,7 @@ function calculateElementSize(
   element: AdElement,
   surface: SurfaceProfile,
   availableSpace: AvailableSpace,
-  composition: Composition
+  _composition: Composition
 ): { width: number; height: number } | null {
   const minTapTarget = surface.minTapTarget || 44;
   const minTextSize = surface.minTextSize || 12;

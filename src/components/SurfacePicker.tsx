@@ -1,5 +1,4 @@
 import { surfaces, getAllSurfaceNames } from '../engine/surfaces';
-import { SurfaceProfile } from '../engine/types';
 import './SurfacePicker.css';
 
 interface SurfacePickerProps {

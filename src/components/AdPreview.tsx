@@ -1,4 +1,4 @@
-import { ResolvedLayout } from '../engine/types';
+import type { ResolvedLayout } from '../engine/types';
 import { getAdElementById } from '../engine/spec';
 import { adData } from '../data/ad';
 import './AdPreview.css';

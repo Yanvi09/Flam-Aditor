@@ -1,4 +1,4 @@
-import { AdSpecification, SurfaceProfile, ResolutionError } from './types';
+import type { AdSpecification, SurfaceProfile, ResolutionError } from './types';
 
 export function validateAdSpec(spec: AdSpecification): ResolutionError[] {
   const errors: ResolutionError[] = [];

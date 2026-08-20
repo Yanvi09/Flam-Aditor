@@ -1,4 +1,4 @@
-import { AdSpecification } from './types';
+import type { AdSpecification } from './types';
 
 export const adSpec: AdSpecification = {
   elements: [

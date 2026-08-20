@@ -1,4 +1,4 @@
-import { ResolvedLayout, ResolvedElement } from '../engine/types';
+import type { ResolvedLayout, ResolvedElement } from '../engine/types';
 import { getAdElementById } from '../engine/spec';
 import './ExplainLayout.css';
 
@@ -93,7 +93,7 @@ export function ExplainLayout({ layout, selectedElementId }: ExplainLayoutProps)
   );
 }
 
-function generateExplanation(specElement: any, resolvedElement: ResolvedElement, layout: ResolvedLayout): string {
+function generateExplanation(specElement: any, _resolvedElement: ResolvedElement, layout: ResolvedLayout): string {
   const priorityText = specElement.priority === 1 ? 'High-priority' : 
                        specElement.priority === 2 ? 'Medium-priority' : 'Low-priority';
   
@@ -109,12 +109,7 @@ function generateExplanation(specElement: any, resolvedElement: ResolvedElement,
   return `${priorityText} ${roleText}. Available surface dimensions (${layout.surface.width}×${layout.surface.height}) allowed a ${composition}. Element was placed without violating constraints or overlapping other elements.`;
 }
 
-function generateDroppedExplanation(specElement: any, resolvedElement: ResolvedElement, layout: ResolvedLayout): string {
-  const priority = specElement.priority;
-  const higherPriorityElements = layout.elements
-    .filter(el => el.visible && getAdElementById(el.id)?.priority! < priority)
-    .map(el => el.id);
-
+function generateDroppedExplanation(_specElement: any, _resolvedElement: ResolvedElement, layout: ResolvedLayout): string {
   let explanation = `Available space was insufficient after protecting higher-priority elements.\n\nDegradation sequence:\n`;
   
   const allElements = layout.elements
