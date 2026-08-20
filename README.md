@@ -169,7 +169,7 @@ The application will be available at `http://localhost:5173`
 
 ## Deployment
 
-The application is deployed and available at: [URL to be added]
+The application is deployed and available at: https://yanvi09.github.io/Flam-Aditor
 
 ## Known Limitations
 
