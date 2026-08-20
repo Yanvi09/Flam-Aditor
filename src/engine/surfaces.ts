@@ -31,8 +31,8 @@ export const surfaces: Record<string, SurfaceProfile> = {
     viewingDistance: 'near',
   },
   'constrained': {
-    width: 200,
-    height: 200,
+    width: 150,
+    height: 150,
     safeArea: { top: 10, right: 10, bottom: 10, left: 10 },
     minTapTarget: 44,
     viewingDistance: 'near',
