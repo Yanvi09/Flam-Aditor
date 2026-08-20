@@ -38,6 +38,7 @@
   padding: var(--space-xs) var(--space-sm);
   background: var(--bg-tertiary);
   border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
 }
 
 .app-main {
@@ -58,6 +59,13 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   overflow: hidden;
+  transition: border-color var(--transition-normal);
+}
+
+.workspace-left:hover,
+.workspace-center:hover,
+.workspace-right:hover {
+  border-color: var(--text-secondary);
 }
 
 .panel-header {
@@ -67,6 +75,7 @@
   font-weight: 500;
   color: var(--text-primary);
   background: var(--bg-tertiary);
+  letter-spacing: -0.01em;
 }
 
 .surface-picker {
@@ -83,6 +92,11 @@
   padding: var(--space-lg);
   background: var(--bg-tertiary);
   overflow: auto;
+  transition: opacity var(--transition-normal);
+}
+
+.preview-container.animating {
+  opacity: 0.5;
 }
 
 .inspector-content {

@@ -13,6 +13,7 @@ function App() {
   const [selectedSurface, setSelectedSurface] = useState('mobile-portrait');
   const [selectedElementId, setSelectedElementId] = useState<string | undefined>();
   const [isResolving, setIsResolving] = useState(false);
+  const [isAnimating, setIsAnimating] = useState(false);
   const [layout, setLayout] = useState(() => {
     const surface = getSurfaceByName(selectedSurface);
     return surface ? resolveLayout(adSpec, surface) : null;
@@ -20,6 +21,7 @@ function App() {
 
   useEffect(() => {
     setIsResolving(true);
+    setIsAnimating(true);
     const surface = getSurfaceByName(selectedSurface);
     if (surface) {
       const newLayout = resolveLayout(adSpec, surface);
@@ -27,6 +29,7 @@ function App() {
       setSelectedElementId(undefined);
     }
     setTimeout(() => setIsResolving(false), 300);
+    setTimeout(() => setIsAnimating(false), 500);
   }, [selectedSurface]);
 
   const handleElementClick = (elementId: string) => {
@@ -60,7 +63,7 @@ function App() {
 
         <div className="workspace-center">
           <div className="panel-header">Ad Preview</div>
-          <div className="preview-container">
+          <div className={`preview-container ${isAnimating ? 'animating' : ''}`}>
             <AdPreview
               layout={layout}
               onElementClick={handleElementClick}

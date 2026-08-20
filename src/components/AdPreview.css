@@ -12,10 +12,11 @@
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
   border-radius: 4px;
   overflow: hidden;
+  transition: all var(--transition-normal);
 }
 
 .ad-element {
-  transition: outline 0.2s ease;
+  transition: all var(--transition-normal);
 }
 
 .ad-element:hover {
