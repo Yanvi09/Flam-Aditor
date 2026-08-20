@@ -89,4 +89,7 @@
   flex: 1;
   padding: var(--space-md);
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
 }

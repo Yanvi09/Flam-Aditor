@@ -1,0 +1,29 @@
+.ad-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+}
+
+.ad-surface {
+  position: relative;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.ad-element {
+  transition: outline 0.2s ease;
+}
+
+.ad-element:hover {
+  outline: 2px solid rgba(214, 160, 128, 0.5);
+  outline-offset: 2px;
+}
+
+.ad-element.selected {
+  outline: 2px solid #D6A080;
+  outline-offset: 2px;
+}

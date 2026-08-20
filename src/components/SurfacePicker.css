@@ -1,0 +1,45 @@
+.surface-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.surface-option {
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: left;
+}
+
+.surface-option:hover {
+  background: var(--bg-card);
+  border-color: var(--text-secondary);
+}
+
+.surface-option.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+
+.surface-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.surface-dimensions {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+
+.surface-constraint {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
