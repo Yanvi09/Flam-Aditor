@@ -196,8 +196,8 @@ function getElementConstraints(element: AdElement, surface: SurfaceProfile, avai
 }
 
 function calculateElementSize(
-  element: AdElement,
-  surface: SurfaceProfile,
+  _element: AdElement,
+  _surface: SurfaceProfile,
   availableSpace: AvailableSpace,
   constraints: ElementSizeConstraints,
   scaleFactor: number = 1.0

@@ -190,7 +190,7 @@ function generateExplanation(specElement: any, resolvedElement: ResolvedElement,
   return explanation;
 }
 
-function generateDroppedExplanation(specElement: any, resolvedElement: ResolvedElement, layout: ResolvedLayout): string {
+function generateDroppedExplanation(_specElement: any, resolvedElement: ResolvedElement, layout: ResolvedLayout): string {
   let explanation = `Available space was insufficient after protecting higher-priority elements.\n\nDegradation sequence:\n`;
   
   const allElements = layout.elements
