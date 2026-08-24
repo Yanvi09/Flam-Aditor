@@ -75,15 +75,24 @@ function App() {
         <div className="workspace-right">
           <div className="panel-header">Layout Inspector</div>
           <div className="inspector-content">
-            <ResolutionFlow isActive={isResolving} />
-            <ExplainLayout
-              layout={layout}
-              selectedElementId={selectedElementId}
-            />
-            <Inspector
-              layout={layout}
-              selectedElementId={selectedElementId}
-            />
+            <ResolutionFlow isActive={isResolving} hasSelection={!!selectedElementId} />
+            {selectedElementId ? (
+              <>
+                <ExplainLayout
+                  layout={layout}
+                  selectedElementId={selectedElementId}
+                />
+                <Inspector
+                  layout={layout}
+                  selectedElementId={selectedElementId}
+                />
+              </>
+            ) : (
+              <Inspector
+                layout={layout}
+                selectedElementId={selectedElementId}
+              />
+            )}
           </div>
         </div>
       </main>

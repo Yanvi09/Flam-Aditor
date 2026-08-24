@@ -35,6 +35,14 @@ export interface SurfaceProfile {
   touchOnly?: boolean;
 }
 
+export interface ResolutionDecision {
+  strategy: string;
+  attempts: number;
+  resized: boolean;
+  repositioned: boolean;
+  compositionChanged: boolean;
+}
+
 export interface ResolvedElement {
   id: string;
   x: number;
@@ -43,6 +51,7 @@ export interface ResolvedElement {
   height: number;
   visible: boolean;
   reason?: string;
+  decisions?: ResolutionDecision;
 }
 
 export interface ResolvedLayout {

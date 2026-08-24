@@ -1,0 +1,22 @@
+<svg width="120" height="180" viewBox="0 0 120 180" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Bottle body -->
+  <rect x="25" y="35" width="70" height="130" rx="6" fill="#F5F0EB"/>
+  <rect x="25" y="35" width="70" height="130" rx="6" stroke="#E8E0D8" stroke-width="1"/>
+  
+  <!-- Cap -->
+  <rect x="32" y="20" width="56" height="18" rx="3" fill="#1A1A1A"/>
+  <rect x="32" y="20" width="56" height="18" rx="3" stroke="#333" stroke-width="1"/>
+  
+  <!-- Brand name on bottle -->
+  <text x="60" y="85" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#1A1A1A" text-anchor="middle">NV</text>
+  <text x="60" y="100" font-family="system-ui, sans-serif" font-size="8" font-weight="400" fill="#1A1A1A" text-anchor="middle" letter-spacing="1">SKIN</text>
+  
+  <!-- Product name -->
+  <text x="60" y="120" font-family="system-ui, sans-serif" font-size="9" font-weight="500" fill="#1A1A1A" text-anchor="middle">Daily Reset</text>
+  
+  <!-- Subtle accent line -->
+  <rect x="40" y="130" width="40" height="1.5" rx="0.75" fill="#D6A080"/>
+  
+  <!-- Volume text -->
+  <text x="60" y="150" font-family="system-ui, sans-serif" font-size="7" fill="#666" text-anchor="middle">100ml</text>
+</svg>

@@ -68,11 +68,45 @@ export function ExplainLayout({ layout, selectedElementId }: ExplainLayoutProps)
           </div>
 
           <div className="explain-section">
-            <h4>Why?</h4>
+            <h4>Why this result?</h4>
             <div className="explain-explanation">
               {generateExplanation(specElement, resolvedElement, layout)}
             </div>
           </div>
+
+          {resolvedElement.decisions && (
+            <div className="explain-section">
+              <h4>Resolution Process</h4>
+              <div className="explain-decisions">
+                <div className="decision-item">
+                  <span className="decision-label">Strategy:</span>
+                  <span className="decision-value">{resolvedElement.decisions.strategy}</span>
+                </div>
+                <div className="decision-item">
+                  <span className="decision-label">Attempts:</span>
+                  <span className="decision-value">{resolvedElement.decisions.attempts}</span>
+                </div>
+                {resolvedElement.decisions.resized && (
+                  <div className="decision-item">
+                    <span className="decision-label">Resized:</span>
+                    <span className="decision-value">Yes</span>
+                  </div>
+                )}
+                {resolvedElement.decisions.repositioned && (
+                  <div className="decision-item">
+                    <span className="decision-label">Repositioned:</span>
+                    <span className="decision-value">Yes</span>
+                  </div>
+                )}
+                {resolvedElement.decisions.compositionChanged && (
+                  <div className="decision-item">
+                    <span className="decision-label">Composition Changed:</span>
+                    <span className="decision-value">Yes</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </>
       ) : (
         <>
@@ -82,18 +116,48 @@ export function ExplainLayout({ layout, selectedElementId }: ExplainLayoutProps)
           </div>
 
           <div className="explain-section">
-            <h4>Why?</h4>
+            <h4>Why this result?</h4>
             <div className="explain-explanation">
               {generateDroppedExplanation(specElement, resolvedElement, layout)}
             </div>
           </div>
+
+          {resolvedElement.decisions && (
+            <div className="explain-section">
+              <h4>Attempted Strategies</h4>
+              <div className="explain-decisions">
+                <div className="decision-item">
+                  <span className="decision-label">Total Attempts:</span>
+                  <span className="decision-value">{resolvedElement.decisions.attempts}</span>
+                </div>
+                {resolvedElement.decisions.resized && (
+                  <div className="decision-item">
+                    <span className="decision-label">Tried:</span>
+                    <span className="decision-value">Size reduction</span>
+                  </div>
+                )}
+                {resolvedElement.decisions.compositionChanged && (
+                  <div className="decision-item">
+                    <span className="decision-label">Tried:</span>
+                    <span className="decision-value">Alternative compositions</span>
+                  </div>
+                )}
+                {resolvedElement.decisions.repositioned && (
+                  <div className="decision-item">
+                    <span className="decision-label">Tried:</span>
+                    <span className="decision-value">Flexible positioning</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
   );
 }
 
-function generateExplanation(specElement: any, _resolvedElement: ResolvedElement, layout: ResolvedLayout): string {
+function generateExplanation(specElement: any, resolvedElement: ResolvedElement, layout: ResolvedLayout): string {
   const priorityText = specElement.priority === 1 ? 'High-priority' : 
                        specElement.priority === 2 ? 'Medium-priority' : 'Low-priority';
   
@@ -104,12 +168,29 @@ function generateExplanation(specElement: any, _resolvedElement: ResolvedElement
 
   const aspectRatio = layout.surface.width / layout.surface.height;
   const composition = aspectRatio < 0.75 ? 'vertical composition' : 
-                      aspectRatio > 1.33 ? 'horizontal composition' : 'balanced composition';
+                      aspectRatio > 1.33 ? 'horizontal composition' : 
+                      layout.surface.height <= 250 && aspectRatio > 3 ? 'compact horizontal composition' : 'balanced composition';
 
-  return `${priorityText} ${roleText}. Available surface dimensions (${layout.surface.width}×${layout.surface.height}) allowed a ${composition}. Element was placed without violating constraints or overlapping other elements.`;
+  let explanation = `${priorityText} ${roleText}. Available surface dimensions (${layout.surface.width}×${layout.surface.height}) resulted in a ${composition}. `;
+
+  if (resolvedElement.decisions) {
+    if (resolvedElement.decisions.resized) {
+      explanation += `Element was resized to fit available space. `;
+    }
+    if (resolvedElement.decisions.repositioned) {
+      explanation += `Element was repositioned to avoid overlap. `;
+    }
+    if (resolvedElement.decisions.compositionChanged) {
+      explanation += `Alternative composition was tried. `;
+    }
+  }
+
+  explanation += `Element was placed without violating constraints or overlapping other elements.`;
+
+  return explanation;
 }
 
-function generateDroppedExplanation(_specElement: any, _resolvedElement: ResolvedElement, layout: ResolvedLayout): string {
+function generateDroppedExplanation(specElement: any, resolvedElement: ResolvedElement, layout: ResolvedLayout): string {
   let explanation = `Available space was insufficient after protecting higher-priority elements.\n\nDegradation sequence:\n`;
   
   const allElements = layout.elements
@@ -117,9 +198,13 @@ function generateDroppedExplanation(_specElement: any, _resolvedElement: Resolve
     .sort((a, b) => a.spec.priority - b.spec.priority);
 
   allElements.forEach((el, index) => {
-    const status = el.visible ? '→ preserve' : '→ drop';
+    const status = el.visible ? '✓ preserve' : '✗ drop';
     explanation += `${index + 1}. ${el.spec.id} ${status}\n`;
   });
+
+  if (resolvedElement.decisions) {
+    explanation += `\nAttempted ${resolvedElement.decisions.attempts} placement strategies before dropping.`;
+  }
 
   return explanation;
 }

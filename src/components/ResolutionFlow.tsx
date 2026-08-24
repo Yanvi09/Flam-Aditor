@@ -2,9 +2,10 @@ import './ResolutionFlow.css';
 
 interface ResolutionFlowProps {
   isActive: boolean;
+  hasSelection: boolean;
 }
 
-export function ResolutionFlow({ isActive }: ResolutionFlowProps) {
+export function ResolutionFlow({ isActive, hasSelection }: ResolutionFlowProps) {
   return (
     <div className="resolution-flow">
       <div className="flow-step">
@@ -27,6 +28,9 @@ export function ResolutionFlow({ isActive }: ResolutionFlowProps) {
         <span className="step-label">Renderer</span>
       </div>
       {isActive && <div className="flow-indicator">Resolving...</div>}
+      {!hasSelection && !isActive && (
+        <div className="flow-hint">Select an element to inspect its resolution</div>
+      )}
     </div>
   );
 }

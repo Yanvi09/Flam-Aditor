@@ -28,6 +28,7 @@
 
 .info-label {
   color: var(--text-secondary);
+  font-size: 11px;
 }
 
 .info-value {
@@ -42,6 +43,61 @@
 
 .info-value.status-invalid {
   color: #F44336;
+}
+
+.info-value.status-visible {
+  color: #4CAF50;
+  font-weight: 500;
+}
+
+.info-value.status-dropped {
+  color: #F44336;
+  font-weight: 500;
+}
+
+.info-value.priority-1 {
+  color: #4CAF50;
+}
+
+.info-value.priority-2 {
+  color: #FFC107;
+}
+
+.info-value.priority-3 {
+  color: #F44336;
+}
+
+.selected-element-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.resolution-decisions {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.decision-tag {
+  display: inline-block;
+  font-size: 9px;
+  padding: 2px 6px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-radius: var(--radius-sm);
+  margin-right: 4px;
+  margin-top: 4px;
+}
+
+.drop-reason {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
 }
 
 .elements-list {

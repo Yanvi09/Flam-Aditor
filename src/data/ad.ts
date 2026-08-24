@@ -1,5 +1,5 @@
 import { adSpec } from '../engine/spec';
-import productImage from '../assets/product.png';
+import productImage from '../assets/product-bottle.svg';
 
 export const adData = {
   spec: adSpec,
