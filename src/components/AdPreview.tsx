@@ -1,6 +1,6 @@
 import type { ResolvedLayout } from '../engine/types';
 import { getAdElementById } from '../engine/spec';
-import { adData } from '../data/ad';
+import { selectProductAsset } from '../data/ad';
 import './AdPreview.css';
 
 interface AdPreviewProps {
@@ -74,9 +74,10 @@ function renderElementContent(specElement: any, resolvedElement: any) {
 
     case 'image':
       if (specElement.role === 'hero') {
+        const productAsset = selectProductAsset(resolvedElement.width, resolvedElement.height);
         return (
           <img
-            src={adData.assets['product-image']}
+            src={productAsset}
             alt="NV Daily Reset"
             style={{
               width: '100%',
