@@ -1,198 +1,194 @@
-# Flam-Aditor
+# Flam-Aditor — Adaptive Layout Engine
 
-A constraint-based adaptive layout engine for multi-surface advertisements.
+Flam-Aditor is an adaptive layout engine that resolves one declarative ad
+specification across multiple surfaces with different dimensions and
+constraints.
 
-## What is Flam-Aditor?
+The engine re-composes the layout for each surface instead of relying on
+uniform scaling or CSS media-query breakpoints.
 
-Flam-Aditor is a frontend engineering demonstration that shows how a single advertisement specification can be automatically adapted to different display surfaces using a constraint-based layout resolver. The engine takes declarative content and surface constraints, then produces valid layouts without manual positioning for each surface.
+## Setup
 
-## Problem
+Requirements:
 
-In modern advertising, the same content needs to work across fundamentally different surfaces:
+- Node.js
+- npm
 
-- **Mobile Portrait**: Tall, narrow screens (320×480)
-- **Mobile Landscape**: Wide, short screens (640×360)  
-- **Broadcast Lower-Third**: Very wide displays (1920×250)
-- **Square Kiosk**: Large touch displays (1080×1080)
-
-Each surface has different constraints:
-- Screen dimensions and aspect ratios
-- Safe areas for system UI
-- Minimum tap targets for touch
-- Minimum text sizes for viewing distance
-- Touch-only vs. remote input
-
-Traditional responsive CSS isn't enough because it doesn't handle priority-based degradation when space is insufficient.
-
-## Architecture
-
-```
-Ad Spec
-   ↓
-Surface Profile
-   ↓
-Constraint Resolver
-   ↓
-Resolved Layout
-   ↓
-DOM Renderer
-```
-
-The architecture separates concerns:
-1. **Ad Specification**: Declarative content with priorities and roles
-2. **Surface Profile**: Constraint definitions for each surface type
-3. **Resolver**: Framework-agnostic TypeScript algorithm
-4. **Resolved Layout**: Typed output with exact positions and sizes
-5. **Renderer**: React component that renders the resolved coordinates
-
-## Algorithm
-
-The resolver uses a priority-based greedy algorithm:
-
-### Step 1: Calculate Available Space
-- Subtract safe area from surface dimensions
-- Determine usable width and height
-
-### Step 2: Sort Elements by Priority
-- Priority 1: Headline, hero product (critical)
-- Priority 2: CTA, price (important)
-- Priority 3: Branding (nice-to-have)
-
-### Step 3: Determine Element Sizes
-- Calculate minimum/maximum sizes based on:
-  - Surface dimensions
-  - Element type (text, image, button)
-  - Tap target constraints
-  - Minimum text size constraints
-
-### Step 4: Choose Composition
-- **Tall surface** (aspect ratio < 0.75): Vertical stacking
-- **Wide surface** (aspect ratio > 1.33): Horizontal arrangement
-- **Square surface** (0.75–1.33): Balanced grid
-
-### Step 5: Place Elements
-- Sequential placement into available regions
-- Track occupied space to prevent overlaps
-- Ensure elements stay within bounds
-
-### Step 6: Degrade Lower-Priority Elements
-When space is insufficient:
-1. Reduce lower-priority element sizes
-2. Reposition to fit
-3. Drop lowest-priority elements as final fallback
-
-### Step 7: Return Resolved Layout
-Each element receives:
-- Exact position (x, y)
-- Dimensions (width, height)
-- Visibility status
-- Reason if dropped
-
-## Why This Is Not Just Responsive CSS
-
-CSS media queries handle layout based on viewport size, but they don't:
-
-- **Prioritize content**: CSS can't decide which elements to drop first
-- **Handle arbitrary constraints**: Can't enforce tap targets or text sizes algorithmically
-- **Explain decisions**: CSS doesn't provide reasoning for layout choices
-- **Work framework-agnostically**: CSS is tied to the web platform
-
-In Flam-Aditor, the TypeScript resolver makes all layout decisions independently of React. CSS only handles the final rendering of already-calculated positions.
-
-## Priority System
-
-Elements are assigned priorities (1 = highest, 3 = lowest):
-
-- **Priority 1**: Headline, hero product (never compromised)
-- **Priority 2**: CTA, price (preserved when possible)
-- **Priority 3**: Branding (first to be dropped)
-
-When space is constrained, the resolver protects higher-priority elements first. The "Explain Layout" feature shows exactly why each element was positioned or dropped.
-
-## TypeScript Design
-
-Core types:
-
-```typescript
-// Element definition
-interface AdElement {
-  id: string;
-  type: ElementType;        // 'text' | 'image' | 'button'
-  role: ElementRole;       // 'primary' | 'hero' | 'action' | 'secondary' | 'branding'
-  priority: Priority;     // 1 | 2 | 3
-  content: string;
-}
-
-// Surface constraints
-interface SurfaceProfile {
-  width: number;
-  height: number;
-  safeArea: SafeArea;
-  minTapTarget?: number;
-  minTextSize?: number;
-  viewingDistance?: 'near' | 'far';
-  touchOnly?: boolean;
-}
-
-// Resolved output
-interface ResolvedElement {
-  id: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  visible: boolean;
-  reason?: string;
-}
-```
-
-## Running Locally
+Install dependencies:
 
 ```bash
-# Install dependencies
 npm install
-
-# Run development server
-npm run dev
-
-# Run tests
-npm test
-
-# Build for production
-npm run build
-
-# Preview production build
-npm run preview
 ```
 
-The application will be available at `http://localhost:5173`
+##Run the Demo
 
-## Deployment
+Start the development server:
 
-The application is deployed and available at: https://yanvi09.github.io/Flam-Aditor
+```npm run dev```
 
-## Known Limitations
+Open the Vite URL shown in the terminal.
 
-- Fixed set of supported element types (text, image, button)
-- Simplified text measurement (doesn't account for actual text rendering)
-- Simplified constraint model (doesn't support complex constraints like alignment)
-- DOM renderer only (no native/mobile rendering)
-- No full mathematical constraint solver (uses greedy algorithm)
-- Limited to rectangular layouts
+**Use the Surface Controls panel to switch between:
 
-## Time Spent
+**Mobile Portrait
+**Mobile Landscape
+**Broadcast Lower Third
+**Square Kiosk
+**Constrained
 
-Approximately 4-5 hours of development time.
+The same ad specification is resolved again for each selected surface.
 
-## AI Disclosure
+##Run Tests
+```npm test
+```
+The test suite verifies layout validity, different surface compositions,
+priority/degradation, overlap prevention, surface bounds, minimum tap
+targets, and resolution decision metadata.
 
-AI tools were used for development assistance, including:
-- Code generation and implementation guidance
-- Debugging and error resolution
-- Documentation and structure suggestions
+##Resolution Flow
+Ad Spec + Surface Profile
+        ↓
+Constraint Resolver
+        ↓
+Resolved Layout
+        ↓
+Renderer
 
-The final implementation was reviewed, tested, and understood by the developer. All architectural decisions and core algorithms were designed to be explainable in a technical interview setting.
+The Ad Spec defines the advertisement elements, roles, priorities, and
+content.
 
-## License
+The Surface Profile defines the target dimensions and constraints.
 
-This project was created as a frontend engineering assignment for Flam.
+The Constraint Resolver converts these inputs into resolved positions,
+sizes, and visibility decisions.
+
+The Renderer displays the resolved layout.
+
+Layout Algorithm
+
+The resolver works in the following steps:
+
+Validate the ad specification and surface constraints.
+Calculate the usable safe-area rectangle.
+Determine the composition strategy from the surface profile.
+Generate candidate positions and sizes for the elements.
+Resolve higher-priority elements first.
+Check candidates against surface bounds and safe-area constraints.
+Check for overlap with already resolved elements.
+Enforce minimum tap-target requirements for interactive elements.
+Resize or reposition elements when a valid alternative is available.
+Degrade lower-priority elements when available space is insufficient.
+Drop an element when no valid placement remains.
+Validate the final layout and record resolution decisions.
+
+Priority and Degradation
+
+Each element has a priority from 1 (highest) to 5 (lowest).
+
+Higher-priority elements are preserved first when space is limited.
+
+Lower-priority elements can be:
+
+repositioned
+resized
+dropped when no valid placement remains
+
+This allows the engine to create a different composition for each surface
+instead of simply shrinking the complete advertisement.
+
+TypeScript Design
+
+The core layout model uses strongly typed TypeScript interfaces and types.
+
+Important types include:
+
+AdElement
+AdSpecification
+SurfaceProfile
+SafeArea
+ResolutionDecision
+ResolvedElement
+ResolvedLayout
+ResolutionError
+LayoutStrategy
+
+AdSpecification defines what the advertisement contains.
+
+SurfaceProfile defines the dimensions and constraints of the target
+surface.
+
+ResolvedLayout defines the final geometry and visibility decisions.
+
+Keeping these models separate allows the resolver to work with typed
+specifications and surface constraints while preventing invalid data shapes
+from being passed between the layout stages.
+
+Validation
+
+The resolver validates:
+
+Surface bounds
+Safe-area constraints
+Element overlap
+Minimum tap-target requirements
+Visible element count
+Dropped element count
+Resolution decisions
+
+The Layout Inspector exposes the resolved positions, sizes, visibility, and
+resolution decisions for individual elements.
+
+Supported Surfaces
+
+Mobile Portrait
+320 × 480 — 44px minimum tap target
+
+Mobile Landscape
+640 × 360 — 44px minimum tap target
+
+Broadcast Lower Third
+1920 × 250 — 32px minimum text size
+
+Square Kiosk
+1080 × 1080 — 60px minimum tap target
+
+Constrained
+150 × 150 — 44px minimum tap target
+
+Known Limitations
+Supported element types are currently limited to text, image, and button.
+Text layout uses geometry-based font-size estimation rather than actual
+browser text measurement.
+Rendering is currently DOM/React based; there is no Canvas backend.
+Composition strategies are predefined.
+Advanced print constraints such as bleed and trim are not implemented.
+Contrast-aware branding placement is not currently a dedicated resolver
+constraint.
+
+Project Structure
+```
+src/
+├── components/
+│   ├── AdPreview.tsx
+│   ├── Inspector.tsx
+│   ├── SurfacePicker.tsx
+│   ├── ExplainLayout.tsx
+│   └── ResolutionFlow.tsx
+│
+├── data/
+│   └── ad.ts
+│
+├── engine/
+│   ├── resolver.ts
+│   ├── spec.ts
+│   ├── surfaces.ts
+│   ├── types.ts
+│   └── validation.ts
+│
+└── test/
+    └── resolver.test.ts
+    ```
+
+Time Spent
+
+Approximately:5 days
