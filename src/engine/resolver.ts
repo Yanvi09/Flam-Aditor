@@ -1127,71 +1127,47 @@ export function resolveLayout(
   let resolved: Map<string, ResolvedElement>;
 
   /*
-   * Use the actual surface dimensions first.
+   * The surface profile declares the composition strategy.
    *
-   * This is deliberately more reliable than relying only on aspect ratio.
-   * The supplied profiles have fixed dimensions, so the named dimensions
-   * are the correct source of truth for the five supported compositions.
+   * The resolver therefore does not identify surfaces by their
+   * width/height values. Dimensions remain constraints, while
+   * layoutStrategy describes the kind of composition the surface
+   * requires.
+   *
+   * This keeps the resolution logic independent from the concrete
+   * 320x480 / 640x360 / 1920x250 / 1080x1080 / 150x150 values.
    */
+  switch (surface.layoutStrategy) {
+    case 'portrait':
+      resolved = createPortraitLayout(spec, surface, safe);
+      break;
 
-  if (
-    surface.width === 150 &&
-    surface.height === 150
-  ) {
-    resolved = createConstrainedLayout(
-      spec,
-      surface,
-      safe
-    );
-  } else if (
-    surface.width === 1920 &&
-    surface.height === 250
-  ) {
-    resolved = createBroadcastLayout(
-      spec,
-      surface,
-      safe
-    );
-  } else if (
-    surface.width === 640 &&
-    surface.height === 360
-  ) {
-    resolved = createLandscapeLayout(
-      spec,
-      surface,
-      safe
-    );
-  } else if (
-    surface.width === 1080 &&
-    surface.height === 1080
-  ) {
-    resolved = createSquareLayout(
-      spec,
-      surface,
-      safe
-    );
-  } else if (
-    surface.width < surface.height
-  ) {
-    resolved = createPortraitLayout(
-      spec,
-      surface,
-      safe
-    );
-  } else if (
-    surface.width > surface.height
-  ) {
-    resolved = createLandscapeLayout(
-      spec,
-      surface,
-      safe
-    );
-  } else {
-    resolved = createSquareLayout(
-      spec,
-      surface,
-      safe
-    );
+    case 'landscape':
+      resolved = createLandscapeLayout(spec, surface, safe);
+      break;
+
+    case 'broadcast':
+      resolved = createBroadcastLayout(spec, surface, safe);
+      break;
+
+    case 'square':
+      resolved = createSquareLayout(spec, surface, safe);
+      break;
+
+    case 'constrained':
+      resolved = createConstrainedLayout(spec, surface, safe);
+      break;
+
+    default: {
+      /*
+       * Exhaustiveness guard. This should only be reachable if a new
+       * LayoutStrategy is added without adding its resolver strategy.
+       */
+      const exhaustiveCheck: never = surface.layoutStrategy;
+      throw new Error(
+        `Unsupported layout strategy: ${String(exhaustiveCheck)}`
+      );
+    }
   }
 
   /*
