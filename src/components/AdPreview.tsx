@@ -197,7 +197,7 @@ function renderElementContent(
              */
             padding: Math.max(2, Math.min(8, fontSize * 0.12)),
 
-            boxSizing: 'border-box',
+          
 
             /*
              * Allow natural wrapping but never allow text to
