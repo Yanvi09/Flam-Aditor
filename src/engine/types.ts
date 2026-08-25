@@ -4,7 +4,7 @@ export type ElementType = 'text' | 'image' | 'button';
 
 export type ElementRole = 'primary' | 'hero' | 'action' | 'secondary' | 'branding';
 
-export type Priority = 1 | 2 | 3;
+export type Priority = 1 | 2 | 3 | 4 | 5;
 
 export interface AdElement {
   id: string;

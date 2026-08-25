@@ -1,4 +1,5 @@
 import { adSpec } from '../engine/spec';
+import logoImage from '../assets/logo.png';
 import productLarge from '../assets/product.png';
 import productMedium from '../assets/product-medium.png';
 import productSmall from '../assets/product-small.png';
@@ -6,6 +7,7 @@ import productSmall from '../assets/product-small.png';
 export const adData = {
   spec: adSpec,
   assets: {
+    'logo': logoImage,
     'product-image': productLarge,
     'product-image-large': productLarge,
     'product-image-medium': productMedium,

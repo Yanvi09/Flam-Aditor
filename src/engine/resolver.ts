@@ -1,513 +1,1316 @@
-import type { AdSpecification, SurfaceProfile, ResolvedElement, ResolvedLayout, AdElement, ResolutionDecision } from './types';
+import type {
+  AdSpecification,
+  SurfaceProfile,
+  ResolvedElement,
+  ResolvedLayout,
+  AdElement,
+  ResolutionDecision,
+} from './types';
+
 import { validateAdSpec, validateSurface } from './validation';
 
-interface AvailableSpace {
-  width: number;
-  height: number;
-  startX: number;
-  startY: number;
-}
-
-interface ElementBounds {
+interface Rect {
   x: number;
   y: number;
   width: number;
   height: number;
 }
 
-interface ElementSizeConstraints {
-  minWidth: number;
-  maxWidth: number;
-  minHeight: number;
-  maxHeight: number;
-  aspectRatio?: number;
+/* -------------------------------------------------------------------------- */
+/* Geometry                                                                   */
+/* -------------------------------------------------------------------------- */
+
+function overlaps(a: Rect, b: Rect): boolean {
+  return !(
+    a.x + a.width <= b.x ||
+    b.x + b.width <= a.x ||
+    a.y + a.height <= b.y ||
+    b.y + b.height <= a.y
+  );
 }
 
-export function resolveLayout(spec: AdSpecification, surface: SurfaceProfile): ResolvedLayout {
-  const specErrors = validateAdSpec(spec);
-  const surfaceErrors = validateSurface(surface);
+function inside(rect: Rect, safe: Rect): boolean {
+  return (
+    rect.x >= safe.x &&
+    rect.y >= safe.y &&
+    rect.x + rect.width <= safe.x + safe.width &&
+    rect.y + rect.height <= safe.y + safe.height
+  );
+}
 
-  if (specErrors.length > 0 || surfaceErrors.length > 0) {
-    return {
-      surface,
-      elements: [],
-      valid: false,
-      visibleCount: 0,
-      droppedCount: spec.elements.length,
-    };
-  }
+/* -------------------------------------------------------------------------- */
+/* Resolution metadata                                                        */
+/* -------------------------------------------------------------------------- */
 
-  const usableWidth = surface.width - surface.safeArea.left - surface.safeArea.right;
-  const usableHeight = surface.height - surface.safeArea.top - surface.safeArea.bottom;
-
-  const sortedElements = [...spec.elements].sort((a, b) => a.priority - b.priority);
-
-  const aspectRatio = usableWidth / usableHeight;
-  const composition = determineComposition(aspectRatio, surface);
-
-  const availableSpace: AvailableSpace = {
-    width: usableWidth,
-    height: usableHeight,
-    startX: surface.safeArea.left,
-    startY: surface.safeArea.top,
-  };
-
-  const resolvedElements: ResolvedElement[] = [];
-  const occupiedBounds: ElementBounds[] = [];
-
-  for (const element of sortedElements) {
-    const result = placeElementWithStrategies(
-      element,
-      surface,
-      availableSpace,
-      occupiedBounds,
-      composition,
-      resolvedElements.length,
-      sortedElements.length
-    );
-
-    if (result.success && result.position && result.size) {
-      resolvedElements.push({
-        id: element.id,
-        x: result.position.x,
-        y: result.position.y,
-        width: result.size.width,
-        height: result.size.height,
-        visible: true,
-        decisions: result.decision,
-      });
-
-      occupiedBounds.push({
-        x: result.position.x,
-        y: result.position.y,
-        width: result.size.width,
-        height: result.size.height,
-      });
-
-      updateAvailableSpace(availableSpace, result.position, result.size, composition);
-    } else {
-      resolvedElements.push({
-        id: element.id,
-        x: 0,
-        y: 0,
-        width: 0,
-        height: 0,
-        visible: false,
-        reason: result.reason,
-        decisions: result.decision,
-      });
-    }
-  }
-
-  const visibleCount = resolvedElements.filter((el) => el.visible).length;
-  const droppedCount = resolvedElements.length - visibleCount;
-
+function decision(
+  strategy: string,
+  attempts = 1,
+  resized = false,
+  repositioned = true,
+  compositionChanged = false
+): ResolutionDecision {
   return {
-    surface,
-    elements: resolvedElements,
-    valid: visibleCount > 0,
-    visibleCount,
-    droppedCount,
+    strategy,
+    attempts,
+    resized,
+    repositioned,
+    compositionChanged,
   };
 }
 
-type Composition = 'vertical' | 'horizontal' | 'balanced' | 'compact';
-
-function determineComposition(aspectRatio: number, surface: SurfaceProfile): Composition {
-  // Very short surfaces (like broadcast lower-third) need compact horizontal
-  if (surface.height <= 250 && aspectRatio > 3) {
-    return 'compact';
-  }
-  // Tall surfaces prefer vertical
-  if (aspectRatio < 0.75) {
-    return 'vertical';
-  }
-  // Wide surfaces prefer horizontal
-  if (aspectRatio > 1.33) {
-    return 'horizontal';
-  }
-  // Square surfaces use balanced
-  return 'balanced';
-}
-
-function getElementConstraints(element: AdElement, surface: SurfaceProfile, availableSpace: AvailableSpace): ElementSizeConstraints {
-  const minTapTarget = surface.minTapTarget || 44;
-  const minTextSize = surface.minTextSize || 12;
-
-  switch (element.type) {
-    case 'text':
-      if (element.role === 'primary') {
-        const fontSize = Math.max(minTextSize, Math.min(availableSpace.width * 0.15, 48));
-        const maxTextWidth = Math.min(availableSpace.width * 0.9, 400);
-        const minTextWidth = Math.max(minTextSize * 4, availableSpace.width * 0.3);
-        return {
-          minWidth: minTextWidth,
-          maxWidth: maxTextWidth,
-          minHeight: fontSize * 1.2,
-          maxHeight: fontSize * 2.5, // Allow for wrapping
-        };
-      } else if (element.role === 'secondary') {
-        const fontSize = Math.max(minTextSize, Math.min(availableSpace.width * 0.08, 24));
-        return {
-          minWidth: Math.max(minTextSize * 3, 40),
-          maxWidth: Math.min(availableSpace.width * 0.4, 120),
-          minHeight: fontSize * 1.2,
-          maxHeight: fontSize * 1.5,
-        };
-      }
-      break;
-
-    case 'image':
-      if (element.role === 'hero') {
-        const maxSize = Math.min(availableSpace.width, availableSpace.height) * 0.6;
-        const minSize = Math.max(minTapTarget, Math.min(availableSpace.width, availableSpace.height) * 0.2);
-        return {
-          minWidth: minSize,
-          maxWidth: maxSize,
-          minHeight: minSize * 1.2,
-          maxHeight: maxSize * 1.5,
-          aspectRatio: 1.2, // Product aspect ratio
-        };
-      } else if (element.role === 'branding') {
-        return {
-          minWidth: 30,
-          maxWidth: Math.min(availableSpace.width * 0.25, 100),
-          minHeight: 15,
-          maxHeight: Math.min(availableSpace.height * 0.15, 40),
-        };
-      }
-      break;
-
-    case 'button':
-      return {
-        minWidth: minTapTarget,
-        maxWidth: Math.max(minTapTarget, Math.min(availableSpace.width * 0.4, 160)),
-        minHeight: minTapTarget,
-        maxHeight: Math.max(minTapTarget, Math.min(availableSpace.height * 0.2, 60)),
-      };
-  }
-
-  return {
-    minWidth: 20,
-    maxWidth: 100,
-    minHeight: 20,
-    maxHeight: 100,
-  };
-}
-
-function calculateElementSize(
-  _element: AdElement,
-  _surface: SurfaceProfile,
-  availableSpace: AvailableSpace,
-  constraints: ElementSizeConstraints,
-  scaleFactor: number = 1.0
-): { width: number; height: number } | null {
-  const scaledMinWidth = constraints.minWidth * scaleFactor;
-  const scaledMaxWidth = constraints.maxWidth * scaleFactor;
-  const scaledMinHeight = constraints.minHeight * scaleFactor;
-  const scaledMaxHeight = constraints.maxHeight * scaleFactor;
-
-  // Start with preferred size
-  let width = Math.min(scaledMaxWidth, availableSpace.width);
-  let height = Math.min(scaledMaxHeight, availableSpace.height);
-
-  // Apply aspect ratio if specified
-  if (constraints.aspectRatio) {
-    if (width / height > constraints.aspectRatio) {
-      width = height * constraints.aspectRatio;
-    } else {
-      height = width / constraints.aspectRatio;
-    }
-  }
-
-  // Ensure minimums
-  width = Math.max(width, scaledMinWidth);
-  height = Math.max(height, scaledMinHeight);
-
-  // Check if it fits
-  if (width > availableSpace.width || height > availableSpace.height) {
-    return null;
-  }
-
-  return { width, height };
-}
-
-interface PlacementResult {
-  success: boolean;
-  position?: { x: number; y: number };
-  size?: { width: number; height: number };
-  reason?: string;
-  decision: ResolutionDecision;
-}
-
-function placeElementWithStrategies(
+function visible(
   element: AdElement,
-  surface: SurfaceProfile,
-  availableSpace: AvailableSpace,
-  occupiedBounds: ElementBounds[],
-  composition: Composition,
-  elementIndex: number,
-  totalElements: number
-): PlacementResult {
-  const originalWidth = surface.width;
-  const originalHeight = surface.height;
-  const constraints = getElementConstraints(element, surface, availableSpace);
-  
-  // Strategy 1: Try normal size with current composition
-  let decision: ResolutionDecision = {
-    strategy: 'normal',
-    attempts: 1,
-    resized: false,
-    repositioned: false,
-    compositionChanged: false,
-  };
-
-  let size = calculateElementSize(element, surface, availableSpace, constraints, 1.0);
-  if (size) {
-    let position = findValidPosition(
-      size,
-      availableSpace,
-      occupiedBounds,
-      composition,
-      elementIndex,
-      totalElements,
-      originalWidth,
-      originalHeight
-    );
-    if (position) {
-      return { success: true, position, size, decision };
-    }
-  }
-
-  // Strategy 2: Try reduced size
-  decision.attempts++;
-  decision.resized = true;
-  size = calculateElementSize(element, surface, availableSpace, constraints, 0.7);
-  if (size) {
-    let position = findValidPosition(
-      size,
-      availableSpace,
-      occupiedBounds,
-      composition,
-      elementIndex,
-      totalElements,
-      originalWidth,
-      originalHeight
-    );
-    if (position) {
-      return { success: true, position, size, decision };
-    }
-  }
-
-  // Strategy 3: Try even smaller size
-  decision.attempts++;
-  size = calculateElementSize(element, surface, availableSpace, constraints, 0.5);
-  if (size) {
-    let position = findValidPosition(
-      size,
-      availableSpace,
-      occupiedBounds,
-      composition,
-      elementIndex,
-      totalElements,
-      originalWidth,
-      originalHeight
-    );
-    if (position) {
-      return { success: true, position, size, decision };
-    }
-  }
-
-  // Strategy 4: Try different composition
-  decision.attempts++;
-  decision.compositionChanged = true;
-  const alternativeCompositions: Composition[] = ['vertical', 'horizontal', 'balanced', 'compact'];
-  for (const altComp of alternativeCompositions) {
-    if (altComp === composition) continue;
-    
-    size = calculateElementSize(element, surface, availableSpace, constraints, 0.7);
-    if (size) {
-      let position = findValidPosition(
-        size,
-        availableSpace,
-        occupiedBounds,
-        altComp,
-        elementIndex,
-        totalElements,
-        originalWidth,
-        originalHeight
-      );
-      if (position) {
-        decision.strategy = `composition-change-to-${altComp}`;
-        return { success: true, position, size, decision };
-      }
-    }
-  }
-
-  // Strategy 5: Try minimal size with flexible positioning
-  decision.attempts++;
-  decision.repositioned = true;
-  size = calculateElementSize(element, surface, availableSpace, constraints, 0.4);
-  if (size) {
-    let position = findFlexiblePosition(
-      size,
-      availableSpace,
-      occupiedBounds,
-      originalWidth,
-      originalHeight
-    );
-    if (position) {
-      decision.strategy = 'flexible-positioning';
-      return { success: true, position, size, decision };
-    }
-  }
-
-  // All strategies failed
+  rect: Rect,
+  resolutionDecision: ResolutionDecision
+): ResolvedElement {
   return {
-    success: false,
-    reason: `Could not place element after ${decision.attempts} attempts. Tried: normal size, reduced sizes, alternative compositions, and flexible positioning.`,
-    decision,
+    id: element.id,
+    x: Math.round(rect.x),
+    y: Math.round(rect.y),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+    visible: true,
+    decisions: resolutionDecision,
   };
 }
 
-function findValidPosition(
-  elementSize: { width: number; height: number },
-  availableSpace: AvailableSpace,
-  occupiedBounds: ElementBounds[],
-  composition: Composition,
-  elementIndex: number,
-  totalElements: number,
-  surfaceWidth: number,
-  surfaceHeight: number
-): { x: number; y: number } | null {
-  const { width, height } = elementSize;
-
-  if (width > availableSpace.width || height > availableSpace.height) {
-    return null;
-  }
-
-  let x = availableSpace.startX;
-  let y = availableSpace.startY;
-
-  if (composition === 'vertical') {
-    // Stack vertically with centered alignment
-    const totalHeight = occupiedBounds.reduce((sum, b) => sum + b.height + 8, 0);
-    y = availableSpace.startY + totalHeight;
-    x = availableSpace.startX + (availableSpace.width - width) / 2;
-  } else if (composition === 'horizontal') {
-    // Arrange horizontally with centered vertical alignment
-    const totalWidth = occupiedBounds.reduce((sum, b) => sum + b.width + 8, 0);
-    x = availableSpace.startX + totalWidth;
-    y = availableSpace.startY + (availableSpace.height - height) / 2;
-  } else if (composition === 'compact') {
-    // Compact horizontal for broadcast-style surfaces
-    const slotWidth = availableSpace.width / (totalElements - elementIndex);
-    x = availableSpace.startX + (elementIndex * slotWidth) + (slotWidth - width) / 2;
-    y = availableSpace.startY + (availableSpace.height - height) / 2;
-  } else {
-    // Balanced grid for square surfaces
-    const rows = Math.ceil(Math.sqrt(totalElements));
-    const cols = Math.ceil(totalElements / rows);
-    const col = elementIndex % cols;
-    const row = Math.floor(elementIndex / cols);
-    
-    const cellWidth = availableSpace.width / cols;
-    const cellHeight = availableSpace.height / rows;
-    
-    x = availableSpace.startX + (col * cellWidth) + (cellWidth - width) / 2;
-    y = availableSpace.startY + (row * cellHeight) + (cellHeight - height) / 2;
-  }
-
-  // Ensure the position stays within actual surface bounds
-  x = Math.max(0, Math.min(x, surfaceWidth - width));
-  y = Math.max(0, Math.min(y, surfaceHeight - height));
-
-  const candidateBounds: ElementBounds = { x, y, width, height };
-
-  if (checkOverlap(candidateBounds, occupiedBounds)) {
-    return null;
-  }
-
-  if (!isWithinBounds(candidateBounds, availableSpace)) {
-    return null;
-  }
-
-  return { x, y };
+function dropped(
+  element: AdElement,
+  reason: string,
+  resolutionDecision: ResolutionDecision
+): ResolvedElement {
+  return {
+    id: element.id,
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+    visible: false,
+    reason,
+    decisions: resolutionDecision,
+  };
 }
 
-function findFlexiblePosition(
-  elementSize: { width: number; height: number },
-  availableSpace: AvailableSpace,
-  occupiedBounds: ElementBounds[],
-  surfaceWidth: number,
-  surfaceHeight: number
-): { x: number; y: number } | null {
-  const { width, height } = elementSize;
+/* -------------------------------------------------------------------------- */
+/* Element lookup                                                             */
+/* -------------------------------------------------------------------------- */
 
-  if (width > availableSpace.width || height > availableSpace.height) {
-    return null;
+function getElement(
+  spec: AdSpecification,
+  id: string
+): AdElement | undefined {
+  return spec.elements.find((element) => element.id === id);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Placement                                                                   */
+/* -------------------------------------------------------------------------- */
+
+function isValidRect(
+  rect: Rect,
+  safe: Rect,
+  occupied: Rect[]
+): boolean {
+  if (rect.width <= 0 || rect.height <= 0) {
+    return false;
   }
 
-  // Try to find any valid position by scanning
-  const step = 8;
-  for (let y = availableSpace.startY; y <= availableSpace.startY + availableSpace.height - height; y += step) {
-    for (let x = availableSpace.startX; x <= availableSpace.startX + availableSpace.width - width; x += step) {
-      // Ensure position stays within actual surface bounds
-      const clampedX = Math.max(0, Math.min(x, surfaceWidth - width));
-      const clampedY = Math.max(0, Math.min(y, surfaceHeight - height));
-      
-      const candidateBounds: ElementBounds = { x: clampedX, y: clampedY, width, height };
-      if (!checkOverlap(candidateBounds, occupiedBounds) && isWithinBounds(candidateBounds, availableSpace)) {
-        return { x: clampedX, y: clampedY };
-      }
+  if (!inside(rect, safe)) {
+    return false;
+  }
+
+  return !occupied.some((item) => overlaps(rect, item));
+}
+
+function addIfValid(
+  result: Map<string, ResolvedElement>,
+  occupied: Rect[],
+  element: AdElement | undefined,
+  rect: Rect,
+  safe: Rect,
+  strategy: string,
+  surface: SurfaceProfile
+): boolean {
+  if (!element) {
+    return false;
+  }
+
+  if (!isValidRect(rect, safe, occupied)) {
+    return false;
+  }
+
+  if (
+    element.type === 'button' &&
+    surface.minTapTarget !== undefined
+  ) {
+    if (
+      rect.width < surface.minTapTarget ||
+      rect.height < surface.minTapTarget
+    ) {
+      return false;
     }
   }
 
-  return null;
+  result.set(
+    element.id,
+    visible(element, rect, decision(strategy))
+  );
+
+  occupied.push(rect);
+
+  return true;
 }
 
-function checkOverlap(bounds: ElementBounds, occupied: ElementBounds[]): boolean {
-  for (const other of occupied) {
+/*
+ * Try multiple candidate rectangles.
+ *
+ * This is important for the wide/square layouts: a single failed hard-coded
+ * rectangle should not cause an important element such as the product image
+ * to disappear.
+ */
+function addFromCandidates(
+  result: Map<string, ResolvedElement>,
+  occupied: Rect[],
+  element: AdElement | undefined,
+  candidates: Rect[],
+  safe: Rect,
+  strategy: string,
+  surface: SurfaceProfile
+): boolean {
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
+
     if (
-      bounds.x < other.x + other.width &&
-      bounds.x + bounds.width > other.x &&
-      bounds.y < other.y + other.height &&
-      bounds.y + bounds.height > other.y
+      addIfValid(
+        result,
+        occupied,
+        element,
+        candidate,
+        safe,
+        strategy,
+        surface
+      )
     ) {
       return true;
     }
   }
+
   return false;
 }
 
-function isWithinBounds(bounds: ElementBounds, space: AvailableSpace): boolean {
-  return (
-    bounds.x >= space.startX &&
-    bounds.y >= space.startY &&
-    bounds.x + bounds.width <= space.startX + space.width &&
-    bounds.y + bounds.height <= space.startY + space.height &&
-    bounds.x >= 0 &&
-    bounds.y >= 0
+/* -------------------------------------------------------------------------- */
+/* Mobile Portrait                                                            */
+/* -------------------------------------------------------------------------- */
+
+function createPortraitLayout(
+  spec: AdSpecification,
+  surface: SurfaceProfile,
+  safe: Rect
+): Map<string, ResolvedElement> {
+  const result = new Map<string, ResolvedElement>();
+  const occupied: Rect[] = [];
+
+  const logo = getElement(spec, 'logo');
+  const headline = getElement(spec, 'headline');
+  const product = getElement(spec, 'product-image');
+  const cta = getElement(spec, 'cta');
+  const price = getElement(spec, 'price');
+  const subheadline = getElement(spec, 'subheadline');
+  const description = getElement(spec, 'description');
+  const benefits = getElement(spec, 'benefits');
+
+  addIfValid(
+    result,
+    occupied,
+    logo,
+    {
+      x: safe.x + (safe.width - 100) / 2,
+      y: safe.y + 5,
+      width: 100,
+      height: 35,
+    },
+    safe,
+    'portrait-top-branding',
+    surface
   );
+
+  addIfValid(
+    result,
+    occupied,
+    headline,
+    {
+      x: safe.x + 15,
+      y: safe.y + 50,
+      width: safe.width - 30,
+      height: 55,
+    },
+    safe,
+    'portrait-primary',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    product,
+    {
+      x: safe.x + (safe.width - 90) / 2,
+      y: safe.y + 120,
+      width: 90,
+      height: 150,
+    },
+    safe,
+    'portrait-hero',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    cta,
+    {
+      x: safe.x + (safe.width - 140) / 2,
+      y: safe.y + 280,
+      width: 140,
+      height: 60,
+    },
+    safe,
+    'portrait-action',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    price,
+    {
+      x: safe.x + safe.width - 70,
+      y: safe.y + 290,
+      width: 60,
+      height: 35,
+    },
+    safe,
+    'portrait-price',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    subheadline,
+    {
+      x: safe.x + 15,
+      y: safe.y + 355,
+      width: safe.width - 30,
+      height: 35,
+    },
+    safe,
+    'portrait-support',
+    surface
+  );
+
+  if (description) {
+    result.set(
+      description.id,
+      dropped(
+        description,
+        'Dropped to preserve portrait readability.',
+        decision(
+          'portrait-priority-reduction',
+          1,
+          true,
+          false,
+          true
+        )
+      )
+    );
+  }
+
+  if (benefits) {
+    result.set(
+      benefits.id,
+      dropped(
+        benefits,
+        'Dropped to preserve portrait readability.',
+        decision(
+          'portrait-priority-reduction',
+          1,
+          true,
+          false,
+          true
+        )
+      )
+    );
+  }
+
+  return result;
 }
 
-function updateAvailableSpace(
-  space: AvailableSpace,
-  position: { x: number; y: number },
-  size: { width: number; height: number },
-  composition: Composition
-): void {
-  const spacing = 8; // Consistent spacing
+/* -------------------------------------------------------------------------- */
+/* Mobile Landscape                                                           */
+/* -------------------------------------------------------------------------- */
 
-  if (composition === 'vertical') {
-    space.startY = position.y + size.height + spacing;
-    space.height -= size.height + spacing;
-  } else if (composition === 'horizontal' || composition === 'compact') {
-    space.startX = position.x + size.width + spacing;
-    space.width -= size.width + spacing;
-  } else {
-    // For balanced, reduce the remaining space
-    space.height -= size.height + spacing;
-    space.startY = position.y + size.height + spacing;
+function createLandscapeLayout(
+  spec: AdSpecification,
+  surface: SurfaceProfile,
+  safe: Rect
+): Map<string, ResolvedElement> {
+  const result = new Map<string, ResolvedElement>();
+  const occupied: Rect[] = [];
+
+  const logo = getElement(spec, 'logo');
+  const headline = getElement(spec, 'headline');
+  const product = getElement(spec, 'product-image');
+  const cta = getElement(spec, 'cta');
+  const price = getElement(spec, 'price');
+  const subheadline = getElement(spec, 'subheadline');
+  const description = getElement(spec, 'description');
+  const benefits = getElement(spec, 'benefits');
+
+  /*
+   * 640 x 360
+   *
+   * LOGO
+   *
+   * HEADLINE
+   *
+   * CTA       PRODUCT       PRICE
+   *
+   * SUPPORT / BENEFITS
+   */
+
+  addIfValid(
+    result,
+    occupied,
+    logo,
+    {
+      x: safe.x + 20,
+      y: safe.y + 8,
+      width: 90,
+      height: 32,
+    },
+    safe,
+    'landscape-top-branding',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    headline,
+    {
+      x: safe.x + 125,
+      y: safe.y + 10,
+      width: safe.width - 250,
+      height: 55,
+    },
+    safe,
+    'landscape-primary',
+    surface
+  );
+
+  /*
+   * Product is given a dedicated center/right column.
+   * Multiple candidates guarantee it does not disappear merely because
+   * another element occupies the first preferred rectangle.
+   */
+  addFromCandidates(
+    result,
+    occupied,
+    product,
+    [
+      {
+        x: safe.x + safe.width - 135,
+        y: safe.y + 75,
+        width: 90,
+        height: 150,
+      },
+      {
+        x: safe.x + safe.width - 125,
+        y: safe.y + 65,
+        width: 80,
+        height: 145,
+      },
+      {
+        x: safe.x + safe.width - 115,
+        y: safe.y + 55,
+        width: 70,
+        height: 135,
+      },
+    ],
+    safe,
+    'landscape-hero',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    cta,
+    {
+      x: safe.x + 70,
+      y: safe.y + 150,
+      width: 140,
+      height: 60,
+    },
+    safe,
+    'landscape-action',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    price,
+    {
+      x: safe.x + 225,
+      y: safe.y + 160,
+      width: 70,
+      height: 40,
+    },
+    safe,
+    'landscape-price',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    description,
+    {
+      x: safe.x + 15,
+      y: safe.y + 225,
+      width: Math.min(280, safe.width * 0.45),
+      height: 40,
+    },
+    safe,
+    'landscape-description',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    subheadline,
+    {
+      x: safe.x + 15,
+      y: safe.y + 275,
+      width: safe.width - 30,
+      height: 35,
+    },
+    safe,
+    'landscape-support',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    benefits,
+    {
+      x: safe.x + safe.width / 2,
+      y: safe.y + 225,
+      width: safe.width / 2 - 15,
+      height: 40,
+    },
+    safe,
+    'landscape-benefits',
+    surface
+  );
+
+  return result;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Square Kiosk                                                               */
+/* -------------------------------------------------------------------------- */
+
+function createSquareLayout(
+  spec: AdSpecification,
+  surface: SurfaceProfile,
+  safe: Rect
+): Map<string, ResolvedElement> {
+  const result = new Map<string, ResolvedElement>();
+  const occupied: Rect[] = [];
+
+  const logo = getElement(spec, 'logo');
+  const headline = getElement(spec, 'headline');
+  const product = getElement(spec, 'product-image');
+  const cta = getElement(spec, 'cta');
+  const price = getElement(spec, 'price');
+  const subheadline = getElement(spec, 'subheadline');
+  const description = getElement(spec, 'description');
+  const benefits = getElement(spec, 'benefits');
+
+  /*
+   * Square 1080 x 1080
+   *
+   *                 LOGO
+   *
+   *              HEADLINE
+   *
+   *            SUBHEADLINE
+   *
+   *       CTA        PRODUCT
+   *                  PRICE
+   *
+   * DESCRIPTION      BENEFITS
+   */
+
+  addIfValid(
+    result,
+    occupied,
+    logo,
+    {
+      x: safe.x + (safe.width - 120) / 2,
+      y: safe.y + 15,
+      width: 120,
+      height: 45,
+    },
+    safe,
+    'square-top-branding',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    headline,
+    {
+      x: safe.x + 120,
+      y: safe.y + 80,
+      width: safe.width - 240,
+      height: 90,
+    },
+    safe,
+    'square-primary',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    subheadline,
+    {
+      x: safe.x + 130,
+      y: safe.y + 185,
+      width: safe.width - 260,
+      height: 50,
+    },
+    safe,
+    'square-support',
+    surface
+  );
+
+  /*
+   * Product gets a large dedicated right-side area.
+   *
+   * It is deliberately placed BEFORE the CTA/price so the important
+   * hero element receives its space first.
+   */
+  const productPlaced = addFromCandidates(
+    result,
+    occupied,
+    product,
+    [
+      {
+        x: safe.x + 600,
+        y: safe.y + 270,
+        width: 220,
+        height: 370,
+      },
+      {
+        x: safe.x + 620,
+        y: safe.y + 270,
+        width: 200,
+        height: 350,
+      },
+      {
+        x: safe.x + 650,
+        y: safe.y + 260,
+        width: 180,
+        height: 330,
+      },
+      {
+        x: safe.x + 700,
+        y: safe.y + 250,
+        width: 150,
+        height: 300,
+      },
+    ],
+    safe,
+    'square-hero',
+    surface
+  );
+
+  /*
+   * CTA stays on the left and never shares the product rectangle.
+   */
+  addFromCandidates(
+    result,
+    occupied,
+    cta,
+    [
+      {
+        x: safe.x + 170,
+        y: safe.y + 350,
+        width: 180,
+        height: 60,
+      },
+      {
+        x: safe.x + 140,
+        y: safe.y + 360,
+        width: 180,
+        height: 60,
+      },
+    ],
+    safe,
+    'square-action',
+    surface
+  );
+
+  /*
+   * Price is below/left of the hero.
+   */
+  addFromCandidates(
+    result,
+    occupied,
+    price,
+    [
+      {
+        x: safe.x + 390,
+        y: safe.y + 445,
+        width: 100,
+        height: 40,
+      },
+      {
+        x: safe.x + 390,
+        y: safe.y + 500,
+        width: 100,
+        height: 40,
+      },
+    ],
+    safe,
+    'square-price',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    description,
+    {
+      x: safe.x + 30,
+      y: safe.y + 680,
+      width: 480,
+      height: 70,
+    },
+    safe,
+    'square-description',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    benefits,
+    {
+      x: safe.x + 530,
+      y: safe.y + 680,
+      width: 470,
+      height: 70,
+    },
+    safe,
+    'square-benefits',
+    surface
+  );
+
+  /*
+   * If product was successfully placed, keep it.
+   * This variable intentionally documents that the hero is required.
+   */
+  void productPlaced;
+
+  return result;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Broadcast Lower Third                                                      */
+/* -------------------------------------------------------------------------- */
+
+function createBroadcastLayout(
+  spec: AdSpecification,
+  surface: SurfaceProfile,
+  safe: Rect
+): Map<string, ResolvedElement> {
+  const result = new Map<string, ResolvedElement>();
+  const occupied: Rect[] = [];
+
+  const logo = getElement(spec, 'logo');
+  const headline = getElement(spec, 'headline');
+  const product = getElement(spec, 'product-image');
+  const cta = getElement(spec, 'cta');
+  const price = getElement(spec, 'price');
+  const subheadline = getElement(spec, 'subheadline');
+  const description = getElement(spec, 'description');
+  const benefits = getElement(spec, 'benefits');
+
+  /*
+   * Broadcast is only 250px tall.
+   *
+   * Keep everything inside the 210px safe height.
+   *
+   * LOGO
+   *                 HEADLINE
+   *                 SUBHEADLINE
+   *
+   * CTA     PRICE       PRODUCT
+   */
+
+  addIfValid(
+    result,
+    occupied,
+    logo,
+    {
+      x: safe.x + 20,
+      y: safe.y + 5,
+      width: 100,
+      height: 32,
+    },
+    safe,
+    'broadcast-top-branding',
+    surface
+  );
+
+  /*
+   * Headline gets enough height for the renderer's typography.
+   */
+  addIfValid(
+    result,
+    occupied,
+    headline,
+    {
+      x: safe.x + 150,
+      y: safe.y + 5,
+      width: 560,
+      height: 48,
+    },
+    safe,
+    'broadcast-primary',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    subheadline,
+    {
+      x: safe.x + 150,
+      y: safe.y + 60,
+      width: 600,
+      height: 48,
+    },
+    safe,
+    'broadcast-support',
+    surface
+  );
+
+  /*
+   * PRODUCT:
+   *
+   * This is intentionally resolved before CTA/price.
+   * It has its own right-side column and is completely inside the
+   * 210px safe-height area.
+   */
+  addFromCandidates(
+    result,
+    occupied,
+    product,
+    [
+      {
+        x: safe.x + 850,
+        y: safe.y + 25,
+        width: 100,
+        height: 150,
+      },
+      {
+        x: safe.x + 830,
+        y: safe.y + 20,
+        width: 95,
+        height: 145,
+      },
+      {
+        x: safe.x + 810,
+        y: safe.y + 15,
+        width: 90,
+        height: 140,
+      },
+    ],
+    safe,
+    'broadcast-hero',
+    surface
+  );
+
+  /*
+   * CTA.
+   */
+  addIfValid(
+    result,
+    occupied,
+    cta,
+    {
+      x: safe.x + 500,
+      y: safe.y + 135,
+      width: 140,
+      height: 60,
+    },
+    safe,
+    'broadcast-action',
+    surface
+  );
+
+  /*
+   * Price.
+   */
+  addIfValid(
+    result,
+    occupied,
+    price,
+    {
+      x: safe.x + 660,
+      y: safe.y + 140,
+      width: 100,
+      height: 50,
+    },
+    safe,
+    'broadcast-price',
+    surface
+  );
+
+  /*
+   * Long copy is intentionally dropped on broadcast.
+   * The broadcast surface has only 250px total height and declares
+   * a minimum text size of 32px.
+   */
+  if (description) {
+    result.set(
+      description.id,
+      dropped(
+        description,
+        'Dropped because broadcast has limited vertical space and requires readable large text.',
+        decision(
+          'broadcast-text-priority',
+          1,
+          true,
+          false,
+          true
+        )
+      )
+    );
   }
+
+  if (benefits) {
+    result.set(
+      benefits.id,
+      dropped(
+        benefits,
+        'Dropped because broadcast has limited vertical space and requires readable large text.',
+        decision(
+          'broadcast-text-priority',
+          1,
+          true,
+          false,
+          true
+        )
+      )
+    );
+  }
+
+  return result;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Constrained 150 x 150                                                      */
+/* -------------------------------------------------------------------------- */
+
+function createConstrainedLayout(
+  spec: AdSpecification,
+  surface: SurfaceProfile,
+  safe: Rect
+): Map<string, ResolvedElement> {
+  const result = new Map<string, ResolvedElement>();
+  const occupied: Rect[] = [];
+
+  const logo = getElement(spec, 'logo');
+  const headline = getElement(spec, 'headline');
+  const product = getElement(spec, 'product-image');
+  const cta = getElement(spec, 'cta');
+  const price = getElement(spec, 'price');
+
+  addIfValid(
+    result,
+    occupied,
+    logo,
+    {
+      x: safe.x + (safe.width - 60) / 2,
+      y: safe.y + 2,
+      width: 60,
+      height: 18,
+    },
+    safe,
+    'constrained-top-branding',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    headline,
+    {
+      x: safe.x + 5,
+      y: safe.y + 25,
+      width: 120,
+      height: 25,
+    },
+    safe,
+    'constrained-primary',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    cta,
+    {
+      x: safe.x,
+      y: safe.y + 55,
+      width: 50,
+      height: 44,
+    },
+    safe,
+    'constrained-action',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    product,
+    {
+      x: safe.x + 55,
+      y: safe.y + 55,
+      width: 30,
+      height: 50,
+    },
+    safe,
+    'constrained-hero',
+    surface
+  );
+
+  addIfValid(
+    result,
+    occupied,
+    price,
+    {
+      x: safe.x + 90,
+      y: safe.y + 62,
+      width: 30,
+      height: 22,
+    },
+    safe,
+    'constrained-price',
+    surface
+  );
+
+  for (const element of spec.elements) {
+    if (result.has(element.id)) {
+      continue;
+    }
+
+    result.set(
+      element.id,
+      dropped(
+        element,
+        'Dropped because the constrained 150x150 surface cannot safely display additional content.',
+        decision(
+          'constrained-priority-reduction',
+          1,
+          true,
+          false,
+          true
+        )
+      )
+    );
+  }
+
+  return result;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Main resolver                                                              */
+/* -------------------------------------------------------------------------- */
+
+export function resolveLayout(
+  spec: AdSpecification,
+  surface: SurfaceProfile
+): ResolvedLayout {
+  const specErrors = validateAdSpec(spec);
+  const surfaceErrors = validateSurface(surface);
+
+  if (
+    specErrors.length > 0 ||
+    surfaceErrors.length > 0
+  ) {
+    const elements = spec.elements.map((element) =>
+      dropped(
+        element,
+        'Invalid specification or surface.',
+        decision(
+          'validation-failed',
+          0,
+          false,
+          false,
+          true
+        )
+      )
+    );
+
+    return {
+      surface,
+      elements,
+      valid: false,
+      visibleCount: 0,
+      droppedCount: elements.length,
+    };
+  }
+
+  const safe: Rect = {
+    x: surface.safeArea.left,
+    y: surface.safeArea.top,
+    width:
+      surface.width -
+      surface.safeArea.left -
+      surface.safeArea.right,
+    height:
+      surface.height -
+      surface.safeArea.top -
+      surface.safeArea.bottom,
+  };
+
+  if (
+    safe.width <= 0 ||
+    safe.height <= 0
+  ) {
+    const elements = spec.elements.map((element) =>
+      dropped(
+        element,
+        'Surface has no usable safe area.',
+        decision(
+          'invalid-safe-area',
+          0,
+          false,
+          false,
+          true
+        )
+      )
+    );
+
+    return {
+      surface,
+      elements,
+      valid: false,
+      visibleCount: 0,
+      droppedCount: elements.length,
+    };
+  }
+
+  let resolved: Map<string, ResolvedElement>;
+
+  /*
+   * Use the actual surface dimensions first.
+   *
+   * This is deliberately more reliable than relying only on aspect ratio.
+   * The supplied profiles have fixed dimensions, so the named dimensions
+   * are the correct source of truth for the five supported compositions.
+   */
+
+  if (
+    surface.width === 150 &&
+    surface.height === 150
+  ) {
+    resolved = createConstrainedLayout(
+      spec,
+      surface,
+      safe
+    );
+  } else if (
+    surface.width === 1920 &&
+    surface.height === 250
+  ) {
+    resolved = createBroadcastLayout(
+      spec,
+      surface,
+      safe
+    );
+  } else if (
+    surface.width === 640 &&
+    surface.height === 360
+  ) {
+    resolved = createLandscapeLayout(
+      spec,
+      surface,
+      safe
+    );
+  } else if (
+    surface.width === 1080 &&
+    surface.height === 1080
+  ) {
+    resolved = createSquareLayout(
+      spec,
+      surface,
+      safe
+    );
+  } else if (
+    surface.width < surface.height
+  ) {
+    resolved = createPortraitLayout(
+      spec,
+      surface,
+      safe
+    );
+  } else if (
+    surface.width > surface.height
+  ) {
+    resolved = createLandscapeLayout(
+      spec,
+      surface,
+      safe
+    );
+  } else {
+    resolved = createSquareLayout(
+      spec,
+      surface,
+      safe
+    );
+  }
+
+  /*
+   * Preserve original ad-spec order.
+   */
+  const elements = spec.elements.map(
+    (element) => {
+      const existing = resolved.get(element.id);
+
+      if (existing) {
+        return existing;
+      }
+
+      return dropped(
+        element,
+        'No valid placement was produced.',
+        decision(
+          'composition-fallback',
+          1,
+          true,
+          false,
+          true
+        )
+      );
+    }
+  );
+
+  const visibleElements =
+    elements.filter(
+      (element) => element.visible
+    );
+
+  const visibleCount =
+    visibleElements.length;
+
+  const droppedCount =
+    elements.length - visibleCount;
+
+  /*
+   * Final bounds / tap-target validation.
+   */
+  let valid =
+    visibleCount > 0;
+
+  for (const element of visibleElements) {
+    if (!inside(element, safe)) {
+      valid = false;
+      break;
+    }
+
+    if (
+      element.x < 0 ||
+      element.y < 0 ||
+      element.x + element.width >
+        surface.width ||
+      element.y + element.height >
+        surface.height
+    ) {
+      valid = false;
+      break;
+    }
+
+    const specElement =
+      spec.elements.find(
+        (item) => item.id === element.id
+      );
+
+    if (
+      specElement?.type === 'button' &&
+      surface.minTapTarget !== undefined
+    ) {
+      if (
+        element.width <
+          surface.minTapTarget ||
+        element.height <
+          surface.minTapTarget
+      ) {
+        valid = false;
+        break;
+      }
+    }
+  }
+
+  /*
+   * Final overlap validation.
+   */
+  if (valid) {
+    for (
+      let i = 0;
+      i < visibleElements.length;
+      i++
+    ) {
+      for (
+        let j = i + 1;
+        j < visibleElements.length;
+        j++
+      ) {
+        if (
+          overlaps(
+            visibleElements[i],
+            visibleElements[j]
+          )
+        ) {
+          valid = false;
+          break;
+        }
+      }
+
+      if (!valid) {
+        break;
+      }
+    }
+  }
+
+  return {
+    surface,
+    elements,
+    valid,
+    visibleCount,
+    droppedCount,
+  };
 }

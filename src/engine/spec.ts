@@ -28,7 +28,7 @@ export const adSpec: AdSpecification = {
       type: 'text',
       role: 'secondary',
       priority: 2,
-      content: '₹499',
+      content: '₹399',
     },
     {
       id: 'logo',
@@ -36,6 +36,27 @@ export const adSpec: AdSpecification = {
       role: 'branding',
       priority: 3,
       content: 'NV SKIN',
+    },
+    {
+      id: 'subheadline',
+      type: 'text',
+      role: 'secondary',
+      priority: 4,
+      content: 'Deep cleanse. Oil control. Natural glow.',
+    },
+    {
+      id: 'description',
+      type: 'text',
+      role: 'secondary',
+      priority: 5,
+      content: 'Purifying face wash with Tea Tree Extract & Aloe Vera.',
+    },
+    {
+      id: 'benefits',
+      type: 'text',
+      role: 'secondary',
+      priority: 5,
+      content: 'Tea Tree Extract • Aloe Vera • Purifies & Refreshes',
     },
   ],
 };
