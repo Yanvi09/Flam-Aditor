@@ -1,243 +1,328 @@
 # Architecture
 
+Flam-Aditor separates the adaptive layout engine from the React presentation
+layer. The resolver is responsible for layout decisions, while React is
+responsible for rendering and interaction.
+
 ## Component Architecture
 
-```
+```text
 src/
-├── components/          # React UI components
-│   ├── AdPreview.tsx   # Renders resolved layout
-│   ├── SurfacePicker.tsx  # Surface selection UI
-│   ├── Inspector.tsx   # Layout information display
-│   ├── ExplainLayout.tsx  # Killer feature: layout explanations
-│   └── ResolutionFlow.tsx  # Visual resolution pipeline
+├── components/
+│   ├── AdPreview.tsx
+│   ├── SurfacePicker.tsx
+│   ├── Inspector.tsx
+│   ├── ExplainLayout.tsx
+│   └── ResolutionFlow.tsx
 │
-├── engine/             # Framework-agnostic layout engine
-│   ├── types.ts        # TypeScript type definitions
-│   ├── spec.ts         # Advertisement specification
-│   ├── surfaces.ts     # Surface profile definitions
-│   ├── resolver.ts     # Core layout resolution algorithm
-│   └── validation.ts   # Input validation
+├── engine/
+│   ├── types.ts
+│   ├── spec.ts
+│   ├── surfaces.ts
+│   ├── resolver.ts
+│   └── validation.ts
 │
-├── data/               # Application data
-│   └── ad.ts          # Ad content and assets
+├── data/
+│   └── ad.ts
 │
-├── test/              # Test suite
-│   ├── setup.ts       # Test configuration
-│   └── resolver.test.ts  # Resolver tests
+├── test/
+│   ├── setup.ts
+│   └── resolver.test.ts
 │
-├── App.tsx            # Main application component
-├── main.tsx           # Application entry point
-└── index.css          # Global styles
+├── App.tsx
+├── main.tsx
+└── index.css
 ```
+
+### Responsibilities
+
+**components/**  
+React components for surface selection, ad preview, layout inspection, and
+resolution explanations.
+
+**engine/**  
+Framework-independent TypeScript code containing the specification model,
+surface constraints, resolver, and validation logic.
+
+**data/**  
+Advertisement content and image assets.
+
+**test/**  
+Automated tests for the layout resolver.
+
+---
 
 ## Engine Architecture
 
-The layout engine is completely independent of React and can be used in any JavaScript/TypeScript environment.
+The engine follows this flow:
+
+```text
+Ad Specification + Surface Profile
+                ↓
+       Constraint Resolver
+                ↓
+        Resolved Layout
+                ↓
+            Renderer
+```
+
+The resolver does not depend on React or the DOM. It receives typed data and
+returns a `ResolvedLayout` containing element positions, sizes, visibility,
+and resolution decisions.
 
 ### Core Modules
 
-**types.ts**: Defines all data structures
-- `AdElement`: Single ad element with type, role, priority
-- `AdSpecification`: Collection of ad elements
-- `SurfaceProfile`: Surface constraints and dimensions
-- `ResolvedElement`: Output with position, size, visibility
-- `ResolvedLayout`: Complete resolved layout with metadata
+### `types.ts`
 
-**spec.ts**: Advertisement content
-- Single ad specification for NV Skin Daily Reset
-- Five elements: headline, product, CTA, price, logo
-- Fixed content used across all surfaces
+Defines the core TypeScript models:
 
-**surfaces.ts**: Surface constraint profiles
-- Mobile Portrait (320×480)
-- Mobile Landscape (640×360)
-- Broadcast Lower-Third (1920×250)
-- Square Kiosk (1080×1080)
-- Constrained (150×150) - for testing degradation
+- `AdElement`
+- `AdSpecification`
+- `SurfaceProfile`
+- `SafeArea`
+- `ResolutionDecision`
+- `ResolvedElement`
+- `ResolvedLayout`
+- `ResolutionError`
 
-**resolver.ts**: Core resolution algorithm
-- `resolveLayout()`: Main entry point
-- Priority-based element sorting
-- Composition selection based on aspect ratio
-- Sequential element placement
-- Overlap detection and prevention
-- Bounds checking
-- Priority-based degradation
+These types define the contracts between the specification, surface
+constraints, resolver, and renderer.
 
-**validation.ts**: Input validation
-- `validateAdSpec()`: Checks element IDs, priorities
-- `validateSurface()`: Checks dimensions, constraints
+### `spec.ts`
+
+Contains the declarative advertisement specification.
+
+The specification describes the elements using their type, role, priority,
+and content. It does not contain surface-specific coordinates.
+
+### `surfaces.ts`
+
+Contains the supported surface profiles and their constraints.
+
+Current surfaces include:
+
+- Mobile Portrait — 320 × 480
+- Mobile Landscape — 640 × 360
+- Broadcast Lower Third — 1920 × 250
+- Square Kiosk — 1080 × 1080
+- Constrained — 150 × 150
+
+### `resolver.ts`
+
+Contains the core adaptive layout algorithm.
+
+The resolver:
+
+- Validates inputs
+- Calculates the usable safe area
+- Determines an appropriate composition
+- Processes elements according to priority
+- Generates candidate positions and sizes
+- Checks bounds and safe-area constraints
+- Prevents overlap
+- Enforces minimum tap targets
+- Repositions or resizes elements when possible
+- Degrades lower-priority elements when necessary
+- Records resolution decisions
+- Validates the final layout
+
+### `validation.ts`
+
+Provides validation for advertisement specifications, surface profiles, and
+resolved layouts.
+
+---
 
 ## Data Flow
 
-```
-User selects surface
-       ↓
-SurfacePicker sends surface name to App
-       ↓
-App retrieves SurfaceProfile from surfaces.ts
-       ↓
-App calls resolveLayout(adSpec, surfaceProfile)
-       ↓
-Resolver processes specification + constraints
-       ↓
-Resolver returns ResolvedLayout
-       ↓
-App passes ResolvedLayout to components
-       ↓
-AdPreview renders elements at resolved positions
-       ↓
-Inspector shows layout information
-       ↓
-ExplainLayout explains selected element's resolution
+```text
+User selects a surface
+        ↓
+SurfacePicker
+        ↓
+App retrieves SurfaceProfile
+        ↓
+resolveLayout(adSpec, surface)
+        ↓
+ResolvedLayout
+        ↓
+AdPreview renders the result
+        ↓
+Inspector displays resolution information
 ```
 
-## Resolver Flow
+When the selected surface changes, the same advertisement specification is
+resolved again against the new surface profile.
 
-1. **Validation**: Check spec and surface for errors
-2. **Space Calculation**: Determine usable width/height from safe area
-3. **Element Sorting**: Sort elements by priority (1 → 2 → 3)
-4. **Composition Selection**: Choose layout based on aspect ratio
-5. **Element Sizing**: Calculate appropriate sizes for each element
-6. **Position Finding**: Find valid position without overlap
-7. **Bounds Checking**: Ensure element stays within surface
-8. **Space Update**: Update available space for next element
-9. **Degradation**: Drop elements that can't fit
-10. **Result Assembly**: Return resolved layout with metadata
+---
 
-## Why Resolver Is Framework-Independent
+## Resolution Flow
 
-The resolver:
-- Uses only plain TypeScript
-- Has no React dependencies
-- Returns pure data structures
-- Can be tested without DOM
-- Can be used in Node.js, React, Vue, Angular, etc.
-- Makes layout decisions based only on input data
+The resolver follows these main stages:
 
-This separation allows:
-- Easy testing of core algorithm
-- Potential reuse in other contexts
-- Clear separation of concerns
-- Better interview explanation
+1. Validate the advertisement specification and surface.
+2. Calculate the usable safe-area rectangle.
+3. Determine the composition appropriate for the surface dimensions and
+   constraints.
+4. Process elements according to priority.
+5. Generate candidate sizes and positions.
+6. Reject candidates that violate surface bounds or safe-area constraints.
+7. Reject candidates that overlap already resolved elements.
+8. Check interactive elements against minimum tap-target requirements.
+9. Try alternative sizes or positions when the first candidate cannot be used.
+10. Degrade lower-priority elements when no valid placement remains.
+11. Mark unresolved elements as dropped.
+12. Validate the final composition.
+13. Store resolution decisions for inspection.
 
-## How to Add a New Surface
+The result is a composed layout rather than a uniformly scaled version of the
+original advertisement.
 
-1. Add surface profile to `src/engine/surfaces.ts`:
+---
+
+## Priority and Degradation
+
+Each element has a priority from `1` to `5`.
+
+```text
+1 = highest priority
+5 = lowest priority
+```
+
+Higher-priority elements are resolved first.
+
+When space becomes insufficient, the resolver attempts to preserve important
+content before lower-priority content.
+
+Depending on the available space, an element may be:
+
+1. Placed normally
+2. Resized
+3. Repositioned
+4. Dropped if no valid placement remains
+
+This allows constrained surfaces to contain the most important content without
+allowing elements to overlap or leave the valid surface area.
+
+---
+
+## TypeScript Design
+
+The engine uses strongly typed TypeScript models for its inputs and outputs.
+
+For example:
+
+```text
+AdSpecification
+      ↓
+SurfaceProfile
+      ↓
+resolveLayout()
+      ↓
+ResolvedLayout
+```
+
+`AdElement` restricts valid element types, roles, priorities, and content.
+
+`SurfaceProfile` defines dimensions and optional constraints such as safe areas,
+minimum tap targets, and minimum text size.
+
+`ResolvedElement` defines the geometry and visibility produced by the resolver.
+
+Keeping these models separate prevents rendering code from becoming
+responsible for layout decisions and keeps the core engine testable.
+
+---
+
+## Rendering Separation
+
+### Resolver
+
+`resolver.ts` is responsible for:
+
+- Position
+- Size
+- Visibility
+- Constraint checking
+- Priority/degradation
+- Resolution decisions
+
+It returns data rather than manipulating the DOM.
+
+### Renderer
+
+`AdPreview.tsx` is responsible for:
+
+- Rendering the resolved rectangles
+- Displaying text, images, and buttons
+- Applying visual styling
+- Handling element selection and interaction
+
+The renderer does not calculate the adaptive layout.
+
+This separation means the resolver can be tested independently of React and
+could support another rendering backend in the future.
+
+---
+
+## Adding a New Surface
+
+A new surface can be added by providing another `SurfaceProfile` in
+`surfaces.ts`.
+
+Example:
 
 ```typescript
-export const surfaces: Record<string, SurfaceProfile> = {
-  // existing surfaces...
-  'new-surface': {
-    width: 800,
-    height: 600,
-    safeArea: { top: 20, right: 20, bottom: 20, left: 20 },
-    minTapTarget: 44,
-    viewingDistance: 'near',
+'new-surface': {
+  width: 800,
+  height: 600,
+  safeArea: {
+    top: 20,
+    right: 20,
+    bottom: 20,
+    left: 20,
   },
-};
+  minTapTarget: 44,
+  viewingDistance: 'near',
+},
 ```
 
-2. The resolver will automatically handle it because:
-- It operates on surface properties, not names
-- No hardcoded layout branches per surface
-- Composition is derived from aspect ratio
-- Same algorithm works for any dimensions
+The resolver uses the surface's dimensions and constraints when calculating
+the layout. No CSS media-query breakpoint is required for the engine to make
+the layout decision.
 
-## How to Add a New Element Type
+---
 
-1. Add type to `ElementType` in `src/engine/types.ts`:
+## Extensibility
 
-```typescript
-export type ElementType = 'text' | 'image' | 'button' | 'video';
-```
+The architecture can be extended with:
 
-2. Add role to `ElementRole` if needed:
+- New element types
+- New surface profiles
+- Additional surface constraints
+- Additional composition strategies
+- Additional rendering backends
 
-```typescript
-export type ElementRole = 'primary' | 'hero' | 'action' | 'secondary' | 'branding' | 'media';
-```
+The existing `ResolvedLayout` interface provides a common boundary between
+layout resolution and rendering.
 
-3. Update `calculateElementSize()` in `src/engine/resolver.ts` to handle the new type:
-
-```typescript
-case 'video':
-  return {
-    width: availableSpace.width * 0.6,
-    height: availableSpace.height * 0.4,
-  };
-```
-
-4. Update rendering in `src/components/AdPreview.tsx`:
-
-```typescript
-case 'video':
-  return <video src={specElement.src} style={{ width: '100%', height: '100%' }} />;
-```
-
-## How Degradation Works
-
-When space is insufficient:
-
-1. Elements are processed in priority order (1 → 2 → 3)
-2. Higher-priority elements are placed first
-3. Lower-priority elements are placed next
-4. If an element can't fit:
-   - Try to reduce its size
-   - Try to reposition it
-   - Drop it as final fallback
-5. The "Explain Layout" feature shows the degradation sequence
-
-Example with constrained surface:
-- Priority 1 (headline, product): Always preserved
-- Priority 2 (CTA, price): Preserved when possible
-- Priority 3 (branding): First to be dropped
-
-## How Rendering Is Separated From Resolution
-
-**Resolution (resolver.ts)**:
-- Calculates positions and sizes
-- Returns pure data (numbers, booleans)
-- No DOM knowledge
-- No CSS knowledge
-- No React knowledge
-
-**Rendering (AdPreview.tsx)**:
-- Receives resolved coordinates
-- Applies CSS styling
-- Handles user interaction
-- Performs visual transitions
-- No layout decision logic
-
-This separation ensures:
-- Layout algorithm is testable without browser
-- Same resolver could work with different renderers
-- Clear data flow
-- Easier debugging
-
-## Extensibility Points
-
-The architecture supports extension through:
-
-1. **New Element Types**: Add to ElementType and update resolver
-2. **New Surface Types**: Add to surfaces object, no resolver changes needed
-3. **New Constraints**: Add to SurfaceProfile interface
-4. **New Composition Strategies**: Modify determineComposition() function
-5. **New Rendering Targets**: Create new renderer using same ResolvedLayout
+---
 
 ## Testing Strategy
 
-Tests focus on the resolver because:
-- It contains the core engineering logic
-- It's framework-independent
-- It's the most valuable to verify
+The resolver is the main focus of automated testing because it contains the
+core layout logic.
 
-Test coverage:
-- Valid layout generation for different surfaces
-- Layout differences between surfaces
-- Constraint degradation behavior
-- Overlap prevention
-- Bounds checking
-- Tap target compliance
+The test suite verifies:
 
-React components are tested manually through the live demo since they're primarily visual.
+- Valid layouts
+- Different compositions across surfaces
+- Priority and degradation behavior
+- No element overlap
+- Surface-bound compliance
+- Minimum tap-target compliance
+- Resolution decision metadata
+- Dropped-element decisions
+
+The React interface can also be checked manually by running the local demo
+and switching between the supported surfaces.
