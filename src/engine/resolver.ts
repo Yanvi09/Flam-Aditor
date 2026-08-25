@@ -1,13 +1,18 @@
 import type {
+  AdElement,
   AdSpecification,
-  SurfaceProfile,
+  ElementRole,
+  ResolutionDecision,
   ResolvedElement,
   ResolvedLayout,
-  AdElement,
-  ResolutionDecision,
+  SurfaceProfile,
 } from './types';
 
 import { validateAdSpec, validateSurface } from './validation';
+
+/* -------------------------------------------------------------------------- */
+/* Geometry                                                                   */
+/* -------------------------------------------------------------------------- */
 
 interface Rect {
   x: number;
@@ -16,9 +21,10 @@ interface Rect {
   height: number;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Geometry                                                                   */
-/* -------------------------------------------------------------------------- */
+interface Size {
+  width: number;
+  height: number;
+}
 
 function overlaps(a: Rect, b: Rect): boolean {
   return !(
@@ -29,24 +35,1312 @@ function overlaps(a: Rect, b: Rect): boolean {
   );
 }
 
-function inside(rect: Rect, safe: Rect): boolean {
+function inside(rect: Rect, bounds: Rect): boolean {
   return (
-    rect.x >= safe.x &&
-    rect.y >= safe.y &&
-    rect.x + rect.width <= safe.x + safe.width &&
-    rect.y + rect.height <= safe.y + safe.height
+    rect.x >= bounds.x &&
+    rect.y >= bounds.y &&
+    rect.x + rect.width <= bounds.x + bounds.width &&
+    rect.y + rect.height <= bounds.y + bounds.height
   );
+}
+
+function safeRect(surface: SurfaceProfile): Rect {
+  const safe = surface.safeArea;
+
+  return {
+    x: safe.left,
+    y: safe.top,
+    width: surface.width - safe.left - safe.right,
+    height: surface.height - safe.top - safe.bottom,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Composition                                                                */
+/*                                                                            */
+/* Layout direction is derived from geometry only.                            */
+/* No surface names are inspected.                                            */
+/* -------------------------------------------------------------------------- */
+
+type Orientation = 'row' | 'column';
+
+function determineOrientation(safe: Rect): Orientation {
+  return safe.width >= safe.height ? 'row' : 'column';
+}
+
+/* -------------------------------------------------------------------------- */
+/* Role-based sizing                                                          */
+/*                                                                            */
+/* These rules describe content roles, not individual surfaces.               */
+/* -------------------------------------------------------------------------- */
+
+interface RoleSizingRule {
+  mainAxisFraction: number;
+  crossAxisFraction: number;
+  minWidth: number;
+  minHeight: number;
+  shrinkFloor: number;
+}
+
+const ROLE_SIZING: Record<ElementRole, RoleSizingRule> = {
+  hero: {
+    mainAxisFraction: 0.42,
+    crossAxisFraction: 0.55,
+    minWidth: 60,
+    minHeight: 90,
+    shrinkFloor: 0.55,
+  },
+
+  primary: {
+    mainAxisFraction: 0.5,
+    crossAxisFraction: 0.22,
+    minWidth: 120,
+    minHeight: 32,
+    shrinkFloor: 0.6,
+  },
+
+  action: {
+    mainAxisFraction: 0.28,
+    crossAxisFraction: 0.18,
+    minWidth: 100,
+    minHeight: 44,
+    shrinkFloor: 0.85,
+  },
+
+  secondary: {
+    mainAxisFraction: 0.18,
+    crossAxisFraction: 0.12,
+    minWidth: 50,
+    minHeight: 24,
+    shrinkFloor: 0.6,
+  },
+
+  branding: {
+    mainAxisFraction: 0.18,
+    crossAxisFraction: 0.1,
+    minWidth: 50,
+    minHeight: 18,
+    shrinkFloor: 0.7,
+  },
+};
+
+function baseTargetSize(
+  role: ElementRole,
+  safe: Rect,
+  orientation: Orientation
+): Size {
+  const rule = ROLE_SIZING[role];
+
+  if (orientation === 'row') {
+    return {
+      width: rule.mainAxisFraction * safe.width,
+      height: rule.crossAxisFraction * safe.height,
+    };
+  }
+
+  return {
+    width: rule.crossAxisFraction * safe.width,
+    height: rule.mainAxisFraction * safe.height,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Readability and dominance constraints                                     */
+/* -------------------------------------------------------------------------- */
+
+function minReadableTextWidth(
+  role: ElementRole,
+  surface: SurfaceProfile,
+  safe: Rect
+): number {
+  const fontSize = surface.minTextSize ?? 16;
+  const estimatedCharacterWidth = fontSize * 0.6;
+  const estimatedReadableWidth = estimatedCharacterWidth * 10;
+  const roleMinimum = ROLE_SIZING[role].minWidth;
+
+  return Math.min(
+    safe.width,
+    Math.max(roleMinimum, estimatedReadableWidth)
+  );
+}
+
+const MAX_SINGLE_ELEMENT_AREA_FRACTION = 0.5;
+
+function capDominantSize(
+  rule: RoleSizingRule,
+  size: Size,
+  safe: Rect
+): Size {
+  const maxArea =
+    safe.width *
+    safe.height *
+    MAX_SINGLE_ELEMENT_AREA_FRACTION;
+
+  const area = size.width * size.height;
+
+  if (area <= maxArea || area === 0) {
+    return size;
+  }
+
+  const scale = Math.sqrt(maxArea / area);
+
+  return {
+    width: Math.max(rule.minWidth, size.width * scale),
+    height: Math.max(rule.minHeight, size.height * scale),
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Hard constraints                                                           */
+/* -------------------------------------------------------------------------- */
+
+function applyHardConstraints(
+  element: AdElement,
+  size: Size,
+  surface: SurfaceProfile,
+  safe: Rect
+): Size {
+  const rule = ROLE_SIZING[element.role];
+
+  let width = Math.max(size.width, rule.minWidth);
+  let height = Math.max(size.height, rule.minHeight);
+
+  if (
+    element.type === 'button' &&
+    surface.minTapTarget !== undefined
+  ) {
+    width = Math.max(width, surface.minTapTarget);
+    height = Math.max(height, surface.minTapTarget);
+  }
+
+  if (element.type === 'text') {
+    width = Math.max(
+      width,
+      minReadableTextWidth(element.role, surface, safe)
+    );
+
+    if (surface.minTextSize !== undefined) {
+      height = Math.max(
+        height,
+        surface.minTextSize * 1.4
+      );
+    }
+  }
+
+  ({ width, height } = capDominantSize(
+    rule,
+    { width, height },
+    safe
+  ));
+
+  width = Math.min(width, safe.width);
+  height = Math.min(height, safe.height);
+
+  return {
+    width,
+    height,
+  };
+}
+
+function shrinkSize(
+  element: AdElement,
+  size: Size,
+  scale: number,
+  surface: SurfaceProfile,
+  safe: Rect
+): Size {
+  return applyHardConstraints(
+    element,
+    {
+      width: size.width * scale,
+      height: size.height * scale,
+    },
+    surface,
+    safe
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Candidate placement                                                        */
+/*                                                                            */
+/* Candidates use normalized anchors.                                         */
+/* -------------------------------------------------------------------------- */
+
+type Anchor =
+  | 'top-left'
+  | 'top-center'
+  | 'top-right'
+  | 'center-left'
+  | 'center'
+  | 'center-right'
+  | 'bottom-left'
+  | 'bottom-center'
+  | 'bottom-right';
+
+const ALL_ANCHORS: Anchor[] = [
+  'top-left',
+  'top-center',
+  'top-right',
+  'center-left',
+  'center',
+  'center-right',
+  'bottom-left',
+  'bottom-center',
+  'bottom-right',
+];
+
+const ROLE_PREFERRED_ANCHORS: Record<ElementRole, Anchor[]> = {
+  branding: [
+    'top-left',
+    'top-right',
+    'bottom-left',
+    'bottom-right',
+    'top-center',
+    'center-left',
+    'center-right',
+    'bottom-center',
+    'center',
+  ],
+
+  primary: [
+    'top-center',
+    'top-left',
+    'top-right',
+    'center',
+    'center-left',
+    'center-right',
+    'bottom-center',
+    'bottom-left',
+    'bottom-right',
+  ],
+
+  hero: [
+    'center-right',
+    'center',
+    'center-left',
+    'top-right',
+    'bottom-right',
+    'top-center',
+    'bottom-center',
+    'top-left',
+    'bottom-left',
+  ],
+
+  action: [
+    'bottom-left',
+    'bottom-center',
+    'center-left',
+    'center',
+    'bottom-right',
+    'top-left',
+    'top-center',
+    'center-right',
+    'top-right',
+  ],
+
+  secondary: [
+    'bottom-center',
+    'bottom-right',
+    'bottom-left',
+    'center-right',
+    'center-left',
+    'top-center',
+    'top-right',
+    'top-left',
+    'center',
+  ],
+};
+
+function edgeMargin(
+  safeSpan: number,
+  elementSpan: number
+): number {
+  const desired = Math.max(
+    4,
+    Math.min(safeSpan, elementSpan) * 0.04
+  );
+
+  const available = Math.max(
+    0,
+    (safeSpan - elementSpan) / 2
+  );
+
+  return Math.min(desired, available);
+}
+
+function anchorPoint(
+  anchor: Anchor,
+  safe: Rect,
+  size: Size
+): Rect {
+  const marginX = edgeMargin(
+    safe.width,
+    size.width
+  );
+
+  const marginY = edgeMargin(
+    safe.height,
+    size.height
+  );
+
+  const positions: Record<
+    Anchor,
+    { x: number; y: number }
+  > = {
+    'top-left': {
+      x: safe.x + marginX,
+      y: safe.y + marginY,
+    },
+
+    'top-center': {
+      x: safe.x + (safe.width - size.width) / 2,
+      y: safe.y + marginY,
+    },
+
+    'top-right': {
+      x: safe.x + safe.width - size.width - marginX,
+      y: safe.y + marginY,
+    },
+
+    'center-left': {
+      x: safe.x + marginX,
+      y: safe.y + (safe.height - size.height) / 2,
+    },
+
+    center: {
+      x: safe.x + (safe.width - size.width) / 2,
+      y: safe.y + (safe.height - size.height) / 2,
+    },
+
+    'center-right': {
+      x: safe.x + safe.width - size.width - marginX,
+      y: safe.y + (safe.height - size.height) / 2,
+    },
+
+    'bottom-left': {
+      x: safe.x + marginX,
+      y: safe.y + safe.height - size.height - marginY,
+    },
+
+    'bottom-center': {
+      x: safe.x + (safe.width - size.width) / 2,
+      y: safe.y + safe.height - size.height - marginY,
+    },
+
+    'bottom-right': {
+      x:
+        safe.x +
+        safe.width -
+        size.width -
+        marginX,
+      y:
+        safe.y +
+        safe.height -
+        size.height -
+        marginY,
+    },
+  };
+
+  const point = positions[anchor];
+
+  return {
+    x: point.x,
+    y: point.y,
+    width: size.width,
+    height: size.height,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Holistic candidate scoring                                                 */
+/*                                                                            */
+/* A candidate is not judged only against the element being placed. The      */
+/* resolver also scores the composition that would exist after the candidate */
+/* is added. This keeps the algorithm geometry/role driven while allowing a  */
+/* candidate that is locally valid but globally awkward to lose to a more    */
+/* balanced alternative.                                                     */
+/* -------------------------------------------------------------------------- */
+
+interface OccupiedPlacement {
+  element: AdElement;
+  rect: Rect;
+}
+
+interface Candidate {
+  rect: Rect;
+  score: number;
+  anchor: Anchor;
+}
+
+interface SearchState {
+  placements: Map<string, PlacementLike>;
+  occupied: OccupiedPlacement[];
+  score: number;
+}
+
+interface PlacementLike {
+  rect: Rect;
+  resized: boolean;
+  attempts: number;
+  repositioned: boolean;
+}
+
+function centerOf(rect: Rect): {
+  x: number;
+  y: number;
+} {
+  return {
+    x: rect.x + rect.width / 2,
+    y: rect.y + rect.height / 2,
+  };
+}
+
+function normalizedDistance(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  safe: Rect
+): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+
+  const distance = Math.sqrt(
+    dx * dx + dy * dy
+  );
+
+  const maxDistance =
+    Math.sqrt(
+      safe.width * safe.width +
+        safe.height * safe.height
+    ) || 1;
+
+  return Math.min(
+    1,
+    distance / maxDistance
+  );
+}
+
+function gapBetween(
+  a: Rect,
+  b: Rect,
+  safe: Rect
+): number {
+  const horizontalGap = Math.max(
+    0,
+    Math.max(
+      a.x - (b.x + b.width),
+      b.x - (a.x + a.width)
+    )
+  );
+
+  const verticalGap = Math.max(
+    0,
+    Math.max(
+      a.y - (b.y + b.height),
+      b.y - (a.y + a.height)
+    )
+  );
+
+  return (
+    Math.sqrt(
+      horizontalGap * horizontalGap +
+        verticalGap * verticalGap
+    ) /
+    Math.max(
+      1,
+      Math.sqrt(
+        safe.width * safe.width +
+          safe.height * safe.height
+      )
+    )
+  );
+}
+
+/**
+ * Rewards useful role relationships.
+ *
+ * These are content relationships, not surface-specific layouts:
+ * - action <-> secondary keeps price/CTA content connected
+ * - hero <-> secondary keeps supporting copy near the product
+ * - primary <-> hero keeps the two main focal elements coherent
+ */
+function relationshipScore(
+  element: AdElement,
+  rect: Rect,
+  occupied: OccupiedPlacement[],
+  safe: Rect
+): number {
+  if (occupied.length === 0) {
+    return 0;
+  }
+
+  const candidateCenter = centerOf(rect);
+  let score = 0;
+
+  for (const existing of occupied) {
+    const existingCenter =
+      centerOf(existing.rect);
+
+    const distance = normalizedDistance(
+      candidateCenter,
+      existingCenter,
+      safe
+    );
+
+    const related =
+      (element.role === 'action' &&
+        existing.element.role === 'secondary') ||
+      (element.role === 'secondary' &&
+        existing.element.role === 'action') ||
+      (element.role === 'hero' &&
+        existing.element.role === 'secondary') ||
+      (element.role === 'secondary' &&
+        existing.element.role === 'hero') ||
+      (element.role === 'primary' &&
+        existing.element.role === 'hero') ||
+      (element.role === 'hero' &&
+        existing.element.role === 'primary');
+
+    if (related) {
+      /*
+       * Related content should be connected without being forced to
+       * overlap. The closer the two resolved rectangles are, the better.
+       */
+      const relationshipWeight =
+        element.role === 'primary' ||
+        element.role === 'hero'
+          ? 28
+          : 36;
+
+      score +=
+        (1 - distance) *
+        relationshipWeight;
+    } else {
+      /*
+       * Unrelated content should not become an isolated island.
+       */
+      score +=
+        (1 - distance) * 5;
+    }
+
+    /*
+     * Branding should remain secondary and normally live away from
+     * the visual center of the composition.
+     */
+    if (element.role === 'branding') {
+      const safeCenter = {
+        x: safe.x + safe.width / 2,
+        y: safe.y + safe.height / 2,
+      };
+
+      const centerDistance =
+        normalizedDistance(
+          candidateCenter,
+          safeCenter,
+          safe
+        );
+
+      score += centerDistance * 12;
+    }
+
+    if (
+      existing.element.role ===
+      'branding'
+    ) {
+      score += distance * 3;
+    }
+  }
+
+  return score;
+}
+
+/**
+ * Scores the state that would exist after a candidate is placed.
+ *
+ * The goal is not to fill every pixel. The goal is to avoid a composition
+ * that technically fits but leaves the important content disconnected,
+ * extremely sparse, or dominated by one element.
+ */
+function compositionScore(
+  occupied: OccupiedPlacement[],
+  safe: Rect
+): number {
+  if (occupied.length === 0) {
+    return 0;
+  }
+
+  const safeCenter = {
+    x: safe.x + safe.width / 2,
+    y: safe.y + safe.height / 2,
+  };
+
+  let score = 0;
+
+  /*
+   * Keep the visual mass reasonably connected to the usable safe area.
+   * A large empty central region is a strong signal of weak composition.
+   */
+  let nearestCenterDistance = 1;
+
+  for (const item of occupied) {
+    nearestCenterDistance =
+      Math.min(
+        nearestCenterDistance,
+        normalizedDistance(
+          centerOf(item.rect),
+          safeCenter,
+          safe
+        )
+      );
+  }
+
+  score +=
+    (1 - nearestCenterDistance) * 24;
+
+  /*
+   * Reward useful occupied area, but stop rewarding it once the
+   * composition has enough visual mass. This prevents "fill everything"
+   * from becoming the objective.
+   */
+  const safeArea =
+    safe.width * safe.height;
+
+  const occupiedArea =
+    occupied.reduce(
+      (total, item) =>
+        total +
+        item.rect.width *
+          item.rect.height,
+      0
+    );
+
+  const occupiedRatio =
+    occupiedArea /
+    Math.max(1, safeArea);
+
+  score +=
+    Math.min(occupiedRatio / 0.28, 1) *
+    18;
+
+  /*
+   * Penalize a single element that visually dominates the safe area.
+   * Hard size limits are handled elsewhere; this is a soft composition
+   * preference.
+   */
+  for (const item of occupied) {
+    const areaRatio =
+      (item.rect.width *
+        item.rect.height) /
+      Math.max(1, safeArea);
+
+    if (areaRatio > 0.38) {
+      score -=
+        Math.min(
+          22,
+          (areaRatio - 0.38) * 70
+        );
+    }
+  }
+
+  /*
+   * Penalize large pairwise gaps. This is deliberately a soft penalty:
+   * different aspect ratios may legitimately need different spacing.
+   */
+  for (let i = 0; i < occupied.length; i++) {
+    for (
+      let j = i + 1;
+      j < occupied.length;
+      j++
+    ) {
+      const first = occupied[i];
+      const second = occupied[j];
+
+      const gap =
+        gapBetween(
+          first.rect,
+          second.rect,
+          safe
+        );
+
+      const firstCenter =
+        centerOf(first.rect);
+      const secondCenter =
+        centerOf(second.rect);
+
+      const distance =
+        normalizedDistance(
+          firstCenter,
+          secondCenter,
+          safe
+        );
+
+      const related =
+        (first.element.role ===
+          'action' &&
+          second.element.role ===
+            'secondary') ||
+        (first.element.role ===
+          'secondary' &&
+          second.element.role ===
+            'action') ||
+        (first.element.role ===
+          'hero' &&
+          second.element.role ===
+            'secondary') ||
+        (first.element.role ===
+          'secondary' &&
+          second.element.role ===
+            'hero') ||
+        (first.element.role ===
+          'primary' &&
+          second.element.role ===
+            'hero') ||
+        (first.element.role ===
+          'hero' &&
+          second.element.role ===
+            'primary');
+
+      if (related) {
+        score -=
+          gap *
+          34;
+
+        /*
+         * A related pair that is extremely far apart is worse than
+         * an ordinary unrelated pair with the same geometry.
+         */
+        score -=
+          Math.max(
+            0,
+            distance - 0.45
+          ) * 18;
+      } else {
+        score -=
+          gap * 7;
+      }
+    }
+  }
+
+  /*
+   * Reward a composition whose occupied bounding box uses the surface
+   * naturally, while avoiding a huge reward for occupying almost all
+   * available space.
+   */
+  const minX = Math.min(
+    ...occupied.map(
+      (item) => item.rect.x
+    )
+  );
+  const minY = Math.min(
+    ...occupied.map(
+      (item) => item.rect.y
+    )
+  );
+  const maxX = Math.max(
+    ...occupied.map(
+      (item) =>
+        item.rect.x +
+        item.rect.width
+    )
+  );
+  const maxY = Math.max(
+    ...occupied.map(
+      (item) =>
+        item.rect.y +
+        item.rect.height
+    )
+  );
+
+  const boundingRatio =
+    ((maxX - minX) *
+      (maxY - minY)) /
+    Math.max(1, safeArea);
+
+  score +=
+    Math.min(
+      1,
+      boundingRatio / 0.55
+    ) * 12;
+
+  return score;
+}
+
+function scoreCandidate(
+  element: AdElement,
+  rect: Rect,
+  anchor: Anchor,
+  safe: Rect,
+  occupied: OccupiedPlacement[]
+): number {
+  let score = 0;
+
+  /*
+   * Role-specific anchor preference is a soft preference only.
+   * Geometry and composition can still override it.
+   */
+  const preferred =
+    ROLE_PREFERRED_ANCHORS[
+      element.role
+    ];
+
+  const preferenceIndex =
+    preferred.indexOf(anchor);
+
+  if (preferenceIndex >= 0) {
+    score +=
+      (preferred.length -
+        preferenceIndex) *
+      65;
+  }
+
+  /*
+   * Avoid extremely narrow text columns.
+   */
+  if (element.type === 'text') {
+    const widthRatio =
+      rect.width /
+      Math.max(1, safe.width);
+
+    if (widthRatio < 0.18) {
+      score -= 100;
+    } else if (widthRatio < 0.25) {
+      score -= 40;
+    } else {
+      score += Math.min(
+        24,
+        widthRatio * 24
+      );
+    }
+  }
+
+  /*
+   * Large rectangles are valid when necessary, but a smaller balanced
+   * rectangle is preferable when it still satisfies hard constraints.
+   */
+  const areaRatio =
+    (rect.width * rect.height) /
+    Math.max(
+      1,
+      safe.width * safe.height
+    );
+
+  if (areaRatio > 0.42) {
+    score -=
+      (areaRatio - 0.42) * 65;
+  }
+
+  score +=
+    relationshipScore(
+      element,
+      rect,
+      occupied,
+      safe
+    );
+
+  /*
+   * Evaluate the composition after this candidate is added.
+   */
+  const nextOccupied: OccupiedPlacement[] =
+    [
+      ...occupied,
+      {
+        element,
+        rect,
+      },
+    ];
+
+  score +=
+    compositionScore(
+      nextOccupied,
+      safe
+    );
+
+  return score;
+}
+
+/**
+ * Generate all valid candidates for a given element and size.
+ *
+ * Keeping this separate from the search makes the resolution flow easier
+ * to explain: generate -> validate -> score -> compose -> select.
+ */
+function findCandidates(
+  element: AdElement,
+  size: Size,
+  safe: Rect,
+  occupied: OccupiedPlacement[]
+): Candidate[] {
+  const preferred =
+    ROLE_PREFERRED_ANCHORS[
+      element.role
+    ];
+
+  const anchors = [
+    ...preferred,
+    ...ALL_ANCHORS.filter(
+      (anchor) =>
+        !preferred.includes(anchor)
+    ),
+  ];
+
+  const candidates: Candidate[] =
+    [];
+
+  for (const anchor of anchors) {
+    const rect =
+      anchorPoint(
+        anchor,
+        safe,
+        size
+      );
+
+    if (!inside(rect, safe)) {
+      continue;
+    }
+
+    if (
+      occupied.some(
+        (existing) =>
+          overlaps(
+            rect,
+            existing.rect
+          )
+      )
+    ) {
+      continue;
+    }
+
+    candidates.push({
+      rect,
+      anchor,
+      score:
+        scoreCandidate(
+          element,
+          rect,
+          anchor,
+          safe,
+          occupied
+        ),
+    });
+  }
+
+  candidates.sort(
+    (a, b) =>
+      b.score - a.score
+  );
+
+  return candidates;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Packing                                                                    */
+/* -------------------------------------------------------------------------- */
+
+interface PackCandidate {
+  element: AdElement;
+  size: Size;
+}
+
+interface Placement {
+  rect: Rect;
+  resized: boolean;
+  attempts: number;
+  repositioned: boolean;
+}
+
+const SHRINK_STEPS = [
+  1,
+  0.9,
+  0.8,
+  0.7,
+  0.55,
+];
+
+const MAX_BEAM_STATES = 24;
+
+function sameSize(
+  a: Size,
+  b: Size
+): boolean {
+  return (
+    Math.abs(a.width - b.width) <
+      0.5 &&
+    Math.abs(a.height - b.height) <
+      0.5
+  );
+}
+
+function stateScore(
+  occupied: OccupiedPlacement[],
+  safe: Rect
+): number {
+  return compositionScore(
+    occupied,
+    safe
+  );
+}
+
+/**
+ * Beam-search packing keeps several valid partial compositions alive.
+ *
+ * The old greedy approach selected the best position for one element and
+ * immediately committed to it. That can make a later element impossible
+ * or visually disconnected even though an earlier alternative would have
+ * produced a much better complete advertisement.
+ *
+ * This is still a small priority-ordered resolver, not a per-surface
+ * layout table.
+ */
+function attemptPack(
+  ordered: PackCandidate[],
+  safe: Rect,
+  surface: SurfaceProfile
+):
+  | {
+      success: true;
+      placements: Map<
+        string,
+        Placement
+      >;
+    }
+  | {
+      success: false;
+      failIndex: number;
+    } {
+  let states: SearchState[] = [
+    {
+      placements:
+        new Map(),
+      occupied: [],
+      score: 0,
+    },
+  ];
+
+  for (
+    let index = 0;
+    index < ordered.length;
+    index++
+  ) {
+    const candidate =
+      ordered[index];
+
+    const nextStates: SearchState[] =
+      [];
+
+    for (const state of states) {
+      let lastTriedSize:
+        | Size
+        | null = null;
+
+      for (
+        let scaleIndex = 0;
+        scaleIndex <
+        SHRINK_STEPS.length;
+        scaleIndex++
+      ) {
+        const scale =
+          SHRINK_STEPS[
+            scaleIndex
+          ];
+
+        const rule =
+          ROLE_SIZING[
+            candidate.element.role
+          ];
+
+        if (
+          scale < rule.shrinkFloor
+        ) {
+          break;
+        }
+
+        const size =
+          scale === 1
+            ? candidate.size
+            : shrinkSize(
+                candidate.element,
+                candidate.size,
+                scale,
+                surface,
+                safe
+              );
+
+        if (
+          lastTriedSize &&
+          sameSize(
+            size,
+            lastTriedSize
+          )
+        ) {
+          continue;
+        }
+
+        lastTriedSize = size;
+
+        const candidates =
+          findCandidates(
+            candidate.element,
+            size,
+            safe,
+            state.occupied
+          );
+
+        /*
+         * Keep several placement choices from every partial state.
+         * This is what allows a locally second-best position to win
+         * when evaluated as part of the final composition.
+         */
+        for (
+          let candidateIndex = 0;
+          candidateIndex <
+            candidates.length &&
+          candidateIndex < 6;
+          candidateIndex++
+        ) {
+          const best =
+            candidates[
+              candidateIndex
+            ];
+
+          const placement: Placement =
+            {
+              rect: best.rect,
+              resized:
+                scale !== 1,
+              attempts:
+                scaleIndex + 1,
+              repositioned:
+                best.anchor !==
+                'top-left',
+            };
+
+          const nextOccupied =
+            [
+              ...state.occupied,
+              {
+                element:
+                  candidate.element,
+                rect: best.rect,
+              },
+            ];
+
+          const nextPlacements =
+            new Map(
+              state.placements
+            );
+
+          nextPlacements.set(
+            candidate.element.id,
+            placement
+          );
+
+          const incrementalScore =
+            best.score +
+            stateScore(
+              nextOccupied,
+              safe
+            );
+
+          nextStates.push({
+            placements:
+              nextPlacements,
+            occupied:
+              nextOccupied,
+            score:
+              state.score +
+              incrementalScore,
+          });
+        }
+      }
+    }
+
+    if (nextStates.length === 0) {
+      return {
+        success: false,
+        failIndex: index,
+      };
+    }
+
+    /*
+     * Keep only the strongest distinct partial compositions.
+     * The state count remains bounded and deterministic.
+     */
+    nextStates.sort(
+      (a, b) =>
+        b.score - a.score
+    );
+
+    const selected: SearchState[] =
+      [];
+
+    const seen = new Set<string>();
+
+    for (const state of nextStates) {
+      const signature =
+        state.occupied
+          .map(
+            (item) =>
+              `${item.element.id}:${Math.round(
+                item.rect.x
+              )},${Math.round(
+                item.rect.y
+              )},${Math.round(
+                item.rect.width
+              )},${Math.round(
+                item.rect.height
+              )}`
+          )
+          .join('|');
+
+      if (seen.has(signature)) {
+        continue;
+      }
+
+      seen.add(signature);
+      selected.push(state);
+
+      if (
+        selected.length >=
+        MAX_BEAM_STATES
+      ) {
+        break;
+      }
+    }
+
+    states = selected;
+  }
+
+  if (states.length === 0) {
+    return {
+      success: false,
+      failIndex: 0,
+    };
+  }
+
+  /*
+   * The best complete state is chosen only after all elements have been
+   * considered. This is the holistic part of the resolver.
+   */
+  states.sort(
+    (a, b) =>
+      b.score - a.score
+  );
+
+  return {
+    success: true,
+    placements:
+      states[0].placements,
+  };
 }
 
 /* -------------------------------------------------------------------------- */
 /* Resolution metadata                                                        */
 /* -------------------------------------------------------------------------- */
 
-function decision(
+function createDecision(
   strategy: string,
   attempts = 1,
   resized = false,
-  repositioned = true,
+  repositioned = false,
   compositionChanged = false
 ): ResolutionDecision {
   return {
@@ -58,10 +1352,10 @@ function decision(
   };
 }
 
-function visible(
+function visibleElement(
   element: AdElement,
   rect: Rect,
-  resolutionDecision: ResolutionDecision
+  decision: ResolutionDecision
 ): ResolvedElement {
   return {
     id: element.id,
@@ -70,14 +1364,14 @@ function visible(
     width: Math.round(rect.width),
     height: Math.round(rect.height),
     visible: true,
-    decisions: resolutionDecision,
+    decisions: decision,
   };
 }
 
-function dropped(
+function droppedElement(
   element: AdElement,
   reason: string,
-  resolutionDecision: ResolutionDecision
+  decision: ResolutionDecision
 ): ResolvedElement {
   return {
     id: element.id,
@@ -87,953 +1381,169 @@ function dropped(
     height: 0,
     visible: false,
     reason,
-    decisions: resolutionDecision,
+    decisions: decision,
   };
 }
 
 /* -------------------------------------------------------------------------- */
-/* Element lookup                                                             */
+/* Priority degradation                                                       */
 /* -------------------------------------------------------------------------- */
 
-function getElement(
+function resolveWithDegradation(
   spec: AdSpecification,
-  id: string
-): AdElement | undefined {
-  return spec.elements.find((element) => element.id === id);
-}
+  surface: SurfaceProfile,
+  safe: Rect
+): Map<string, ResolvedElement> {
+  const result =
+    new Map<
+      string,
+      ResolvedElement
+    >();
 
-/* -------------------------------------------------------------------------- */
-/* Placement                                                                   */
-/* -------------------------------------------------------------------------- */
+  /*
+   * Orientation is derived from available geometry.
+   * No surface identity is inspected.
+   */
+  const orientation =
+    determineOrientation(safe);
 
-function isValidRect(
-  rect: Rect,
-  safe: Rect,
-  occupied: Rect[]
-): boolean {
-  if (rect.width <= 0 || rect.height <= 0) {
-    return false;
-  }
-
-  if (!inside(rect, safe)) {
-    return false;
-  }
-
-  return !occupied.some((item) => overlaps(rect, item));
-}
-
-function addIfValid(
-  result: Map<string, ResolvedElement>,
-  occupied: Rect[],
-  element: AdElement | undefined,
-  rect: Rect,
-  safe: Rect,
-  strategy: string,
-  surface: SurfaceProfile
-): boolean {
-  if (!element) {
-    return false;
-  }
-
-  if (!isValidRect(rect, safe, occupied)) {
-    return false;
-  }
-
-  if (
-    element.type === 'button' &&
-    surface.minTapTarget !== undefined
-  ) {
-    if (
-      rect.width < surface.minTapTarget ||
-      rect.height < surface.minTapTarget
-    ) {
-      return false;
-    }
-  }
-
-  result.set(
-    element.id,
-    visible(element, rect, decision(strategy))
-  );
-
-  occupied.push(rect);
-
-  return true;
-}
-
-/*
- * Try multiple candidate rectangles.
- *
- * This is important for the wide/square layouts: a single failed hard-coded
- * rectangle should not cause an important element such as the product image
- * to disappear.
- */
-function addFromCandidates(
-  result: Map<string, ResolvedElement>,
-  occupied: Rect[],
-  element: AdElement | undefined,
-  candidates: Rect[],
-  safe: Rect,
-  strategy: string,
-  surface: SurfaceProfile
-): boolean {
-  for (let i = 0; i < candidates.length; i++) {
-    const candidate = candidates[i];
-
-    if (
-      addIfValid(
-        result,
-        occupied,
+  /*
+   * Process higher-priority content first.
+   * Priority 1 is highest.
+   */
+  let ordered: PackCandidate[] =
+    spec.elements
+      .map((element, index) => ({
         element,
-        candidate,
+        index,
+      }))
+      .sort(
+        (a, b) =>
+          a.element.priority -
+            b.element.priority ||
+          a.index - b.index
+      )
+      .map(({ element }) => ({
+        element,
+        size: applyHardConstraints(
+          element,
+          baseTargetSize(
+            element.role,
+            safe,
+            orientation
+          ),
+          surface,
+          safe
+        ),
+      }));
+
+  const dropped: {
+    element: AdElement;
+    reason: string;
+  }[] = [];
+
+  let finalPlacements =
+    new Map<string, Placement>();
+
+  /*
+   * Keep trying to pack the composition.
+   *
+   * If it cannot fit, remove the least important element
+   * among the elements considered so far and retry.
+   */
+  while (ordered.length > 0) {
+    const packResult =
+      attemptPack(
+        ordered,
         safe,
-        strategy,
         surface
-      )
-    ) {
-      return true;
+      );
+
+    if (packResult.success) {
+      finalPlacements =
+        packResult.placements;
+      break;
     }
+
+    const failIndex =
+      'failIndex' in packResult
+        ? packResult.failIndex
+        : ordered.length;
+
+    let victimIndex =
+      failIndex;
+
+    for (
+      let i = 0;
+      i <= failIndex;
+      i++
+    ) {
+      if (
+        ordered[i].element.priority >
+        ordered[victimIndex].element
+          .priority
+      ) {
+        victimIndex = i;
+      }
+    }
+
+    const [victim] =
+      ordered.splice(
+        victimIndex,
+        1
+      );
+
+    dropped.push({
+      element: victim.element,
+      reason:
+        victimIndex === failIndex
+          ? 'No valid, usable placement remained within the surface constraints.'
+          : 'Dropped so higher-priority content could retain valid space.',
+    });
   }
 
-  return false;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Mobile Portrait                                                            */
-/* -------------------------------------------------------------------------- */
-
-function createPortraitLayout(
-  spec: AdSpecification,
-  surface: SurfaceProfile,
-  safe: Rect
-): Map<string, ResolvedElement> {
-  const result = new Map<string, ResolvedElement>();
-  const occupied: Rect[] = [];
-
-  const logo = getElement(spec, 'logo');
-  const headline = getElement(spec, 'headline');
-  const product = getElement(spec, 'product-image');
-  const cta = getElement(spec, 'cta');
-  const price = getElement(spec, 'price');
-  const subheadline = getElement(spec, 'subheadline');
-  const description = getElement(spec, 'description');
-  const benefits = getElement(spec, 'benefits');
-
-  addIfValid(
-    result,
-    occupied,
-    logo,
-    {
-      x: safe.x + (safe.width - 100) / 2,
-      y: safe.y + 5,
-      width: 100,
-      height: 35,
-    },
-    safe,
-    'portrait-top-branding',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    headline,
-    {
-      x: safe.x + 15,
-      y: safe.y + 50,
-      width: safe.width - 30,
-      height: 55,
-    },
-    safe,
-    'portrait-primary',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    product,
-    {
-      x: safe.x + (safe.width - 90) / 2,
-      y: safe.y + 120,
-      width: 90,
-      height: 150,
-    },
-    safe,
-    'portrait-hero',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    cta,
-    {
-      x: safe.x + (safe.width - 140) / 2,
-      y: safe.y + 280,
-      width: 140,
-      height: 60,
-    },
-    safe,
-    'portrait-action',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    price,
-    {
-      x: safe.x + safe.width - 70,
-      y: safe.y + 290,
-      width: 60,
-      height: 35,
-    },
-    safe,
-    'portrait-price',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    subheadline,
-    {
-      x: safe.x + 15,
-      y: safe.y + 355,
-      width: safe.width - 30,
-      height: 35,
-    },
-    safe,
-    'portrait-support',
-    surface
-  );
-
-  if (description) {
-    result.set(
-      description.id,
-      dropped(
-        description,
-        'Dropped to preserve portrait readability.',
-        decision(
-          'portrait-priority-reduction',
-          1,
-          true,
-          false,
-          true
-        )
-      )
-    );
-  }
-
-  if (benefits) {
-    result.set(
-      benefits.id,
-      dropped(
-        benefits,
-        'Dropped to preserve portrait readability.',
-        decision(
-          'portrait-priority-reduction',
-          1,
-          true,
-          false,
-          true
-        )
-      )
-    );
-  }
-
-  return result;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Mobile Landscape                                                           */
-/* -------------------------------------------------------------------------- */
-
-function createLandscapeLayout(
-  spec: AdSpecification,
-  surface: SurfaceProfile,
-  safe: Rect
-): Map<string, ResolvedElement> {
-  const result = new Map<string, ResolvedElement>();
-  const occupied: Rect[] = [];
-
-  const logo = getElement(spec, 'logo');
-  const headline = getElement(spec, 'headline');
-  const product = getElement(spec, 'product-image');
-  const cta = getElement(spec, 'cta');
-  const price = getElement(spec, 'price');
-  const subheadline = getElement(spec, 'subheadline');
-  const description = getElement(spec, 'description');
-  const benefits = getElement(spec, 'benefits');
-
   /*
-   * 640 x 360
-   *
-   * LOGO
-   *
-   * HEADLINE
-   *
-   * CTA       PRODUCT       PRICE
-   *
-   * SUPPORT / BENEFITS
+   * Convert successful placements into renderer output.
    */
+  for (const candidate of ordered) {
+    const placement =
+      finalPlacements.get(
+        candidate.element.id
+      );
 
-  addIfValid(
-    result,
-    occupied,
-    logo,
-    {
-      x: safe.x + 20,
-      y: safe.y + 8,
-      width: 90,
-      height: 32,
-    },
-    safe,
-    'landscape-top-branding',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    headline,
-    {
-      x: safe.x + 125,
-      y: safe.y + 10,
-      width: safe.width - 250,
-      height: 55,
-    },
-    safe,
-    'landscape-primary',
-    surface
-  );
-
-  /*
-   * Product is given a dedicated center/right column.
-   * Multiple candidates guarantee it does not disappear merely because
-   * another element occupies the first preferred rectangle.
-   */
-  addFromCandidates(
-    result,
-    occupied,
-    product,
-    [
-      {
-        x: safe.x + safe.width - 135,
-        y: safe.y + 75,
-        width: 90,
-        height: 150,
-      },
-      {
-        x: safe.x + safe.width - 125,
-        y: safe.y + 65,
-        width: 80,
-        height: 145,
-      },
-      {
-        x: safe.x + safe.width - 115,
-        y: safe.y + 55,
-        width: 70,
-        height: 135,
-      },
-    ],
-    safe,
-    'landscape-hero',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    cta,
-    {
-      x: safe.x + 70,
-      y: safe.y + 150,
-      width: 140,
-      height: 60,
-    },
-    safe,
-    'landscape-action',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    price,
-    {
-      x: safe.x + 225,
-      y: safe.y + 160,
-      width: 70,
-      height: 40,
-    },
-    safe,
-    'landscape-price',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    description,
-    {
-      x: safe.x + 15,
-      y: safe.y + 225,
-      width: Math.min(280, safe.width * 0.45),
-      height: 40,
-    },
-    safe,
-    'landscape-description',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    subheadline,
-    {
-      x: safe.x + 15,
-      y: safe.y + 275,
-      width: safe.width - 30,
-      height: 35,
-    },
-    safe,
-    'landscape-support',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    benefits,
-    {
-      x: safe.x + safe.width / 2,
-      y: safe.y + 225,
-      width: safe.width / 2 - 15,
-      height: 40,
-    },
-    safe,
-    'landscape-benefits',
-    surface
-  );
-
-  return result;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Square Kiosk                                                               */
-/* -------------------------------------------------------------------------- */
-
-function createSquareLayout(
-  spec: AdSpecification,
-  surface: SurfaceProfile,
-  safe: Rect
-): Map<string, ResolvedElement> {
-  const result = new Map<string, ResolvedElement>();
-  const occupied: Rect[] = [];
-
-  const logo = getElement(spec, 'logo');
-  const headline = getElement(spec, 'headline');
-  const product = getElement(spec, 'product-image');
-  const cta = getElement(spec, 'cta');
-  const price = getElement(spec, 'price');
-  const subheadline = getElement(spec, 'subheadline');
-  const description = getElement(spec, 'description');
-  const benefits = getElement(spec, 'benefits');
-
-  /*
-   * Square 1080 x 1080
-   *
-   *                 LOGO
-   *
-   *              HEADLINE
-   *
-   *            SUBHEADLINE
-   *
-   *       CTA        PRODUCT
-   *                  PRICE
-   *
-   * DESCRIPTION      BENEFITS
-   */
-
-  addIfValid(
-    result,
-    occupied,
-    logo,
-    {
-      x: safe.x + (safe.width - 120) / 2,
-      y: safe.y + 15,
-      width: 120,
-      height: 45,
-    },
-    safe,
-    'square-top-branding',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    headline,
-    {
-      x: safe.x + 120,
-      y: safe.y + 80,
-      width: safe.width - 240,
-      height: 90,
-    },
-    safe,
-    'square-primary',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    subheadline,
-    {
-      x: safe.x + 130,
-      y: safe.y + 185,
-      width: safe.width - 260,
-      height: 50,
-    },
-    safe,
-    'square-support',
-    surface
-  );
-
-  /*
-   * Product gets a large dedicated right-side area.
-   *
-   * It is deliberately placed BEFORE the CTA/price so the important
-   * hero element receives its space first.
-   */
-  const productPlaced = addFromCandidates(
-    result,
-    occupied,
-    product,
-    [
-      {
-        x: safe.x + 600,
-        y: safe.y + 270,
-        width: 220,
-        height: 370,
-      },
-      {
-        x: safe.x + 620,
-        y: safe.y + 270,
-        width: 200,
-        height: 350,
-      },
-      {
-        x: safe.x + 650,
-        y: safe.y + 260,
-        width: 180,
-        height: 330,
-      },
-      {
-        x: safe.x + 700,
-        y: safe.y + 250,
-        width: 150,
-        height: 300,
-      },
-    ],
-    safe,
-    'square-hero',
-    surface
-  );
-
-  /*
-   * CTA stays on the left and never shares the product rectangle.
-   */
-  addFromCandidates(
-    result,
-    occupied,
-    cta,
-    [
-      {
-        x: safe.x + 170,
-        y: safe.y + 350,
-        width: 180,
-        height: 60,
-      },
-      {
-        x: safe.x + 140,
-        y: safe.y + 360,
-        width: 180,
-        height: 60,
-      },
-    ],
-    safe,
-    'square-action',
-    surface
-  );
-
-  /*
-   * Price is below/left of the hero.
-   */
-  addFromCandidates(
-    result,
-    occupied,
-    price,
-    [
-      {
-        x: safe.x + 390,
-        y: safe.y + 445,
-        width: 100,
-        height: 40,
-      },
-      {
-        x: safe.x + 390,
-        y: safe.y + 500,
-        width: 100,
-        height: 40,
-      },
-    ],
-    safe,
-    'square-price',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    description,
-    {
-      x: safe.x + 30,
-      y: safe.y + 680,
-      width: 480,
-      height: 70,
-    },
-    safe,
-    'square-description',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    benefits,
-    {
-      x: safe.x + 530,
-      y: safe.y + 680,
-      width: 470,
-      height: 70,
-    },
-    safe,
-    'square-benefits',
-    surface
-  );
-
-  /*
-   * If product was successfully placed, keep it.
-   * This variable intentionally documents that the hero is required.
-   */
-  void productPlaced;
-
-  return result;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Broadcast Lower Third                                                      */
-/* -------------------------------------------------------------------------- */
-
-function createBroadcastLayout(
-  spec: AdSpecification,
-  surface: SurfaceProfile,
-  safe: Rect
-): Map<string, ResolvedElement> {
-  const result = new Map<string, ResolvedElement>();
-  const occupied: Rect[] = [];
-
-  const logo = getElement(spec, 'logo');
-  const headline = getElement(spec, 'headline');
-  const product = getElement(spec, 'product-image');
-  const cta = getElement(spec, 'cta');
-  const price = getElement(spec, 'price');
-  const subheadline = getElement(spec, 'subheadline');
-  const description = getElement(spec, 'description');
-  const benefits = getElement(spec, 'benefits');
-
-  /*
-   * Broadcast is only 250px tall.
-   *
-   * Keep everything inside the 210px safe height.
-   *
-   * LOGO
-   *                 HEADLINE
-   *                 SUBHEADLINE
-   *
-   * CTA     PRICE       PRODUCT
-   */
-
-  addIfValid(
-    result,
-    occupied,
-    logo,
-    {
-      x: safe.x + 20,
-      y: safe.y + 5,
-      width: 100,
-      height: 32,
-    },
-    safe,
-    'broadcast-top-branding',
-    surface
-  );
-
-  /*
-   * Headline gets enough height for the renderer's typography.
-   */
-  addIfValid(
-    result,
-    occupied,
-    headline,
-    {
-      x: safe.x + 150,
-      y: safe.y + 5,
-      width: 560,
-      height: 48,
-    },
-    safe,
-    'broadcast-primary',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    subheadline,
-    {
-      x: safe.x + 150,
-      y: safe.y + 60,
-      width: 600,
-      height: 48,
-    },
-    safe,
-    'broadcast-support',
-    surface
-  );
-
-  /*
-   * PRODUCT:
-   *
-   * This is intentionally resolved before CTA/price.
-   * It has its own right-side column and is completely inside the
-   * 210px safe-height area.
-   */
-  addFromCandidates(
-    result,
-    occupied,
-    product,
-    [
-      {
-        x: safe.x + 850,
-        y: safe.y + 25,
-        width: 100,
-        height: 150,
-      },
-      {
-        x: safe.x + 830,
-        y: safe.y + 20,
-        width: 95,
-        height: 145,
-      },
-      {
-        x: safe.x + 810,
-        y: safe.y + 15,
-        width: 90,
-        height: 140,
-      },
-    ],
-    safe,
-    'broadcast-hero',
-    surface
-  );
-
-  /*
-   * CTA.
-   */
-  addIfValid(
-    result,
-    occupied,
-    cta,
-    {
-      x: safe.x + 500,
-      y: safe.y + 135,
-      width: 140,
-      height: 60,
-    },
-    safe,
-    'broadcast-action',
-    surface
-  );
-
-  /*
-   * Price.
-   */
-  addIfValid(
-    result,
-    occupied,
-    price,
-    {
-      x: safe.x + 660,
-      y: safe.y + 140,
-      width: 100,
-      height: 50,
-    },
-    safe,
-    'broadcast-price',
-    surface
-  );
-
-  /*
-   * Long copy is intentionally dropped on broadcast.
-   * The broadcast surface has only 250px total height and declares
-   * a minimum text size of 32px.
-   */
-  if (description) {
-    result.set(
-      description.id,
-      dropped(
-        description,
-        'Dropped because broadcast has limited vertical space and requires readable large text.',
-        decision(
-          'broadcast-text-priority',
-          1,
-          true,
-          false,
-          true
-        )
-      )
-    );
-  }
-
-  if (benefits) {
-    result.set(
-      benefits.id,
-      dropped(
-        benefits,
-        'Dropped because broadcast has limited vertical space and requires readable large text.',
-        decision(
-          'broadcast-text-priority',
-          1,
-          true,
-          false,
-          true
-        )
-      )
-    );
-  }
-
-  return result;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Constrained 150 x 150                                                      */
-/* -------------------------------------------------------------------------- */
-
-function createConstrainedLayout(
-  spec: AdSpecification,
-  surface: SurfaceProfile,
-  safe: Rect
-): Map<string, ResolvedElement> {
-  const result = new Map<string, ResolvedElement>();
-  const occupied: Rect[] = [];
-
-  const logo = getElement(spec, 'logo');
-  const headline = getElement(spec, 'headline');
-  const product = getElement(spec, 'product-image');
-  const cta = getElement(spec, 'cta');
-  const price = getElement(spec, 'price');
-
-  addIfValid(
-    result,
-    occupied,
-    logo,
-    {
-      x: safe.x + (safe.width - 60) / 2,
-      y: safe.y + 2,
-      width: 60,
-      height: 18,
-    },
-    safe,
-    'constrained-top-branding',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    headline,
-    {
-      x: safe.x + 5,
-      y: safe.y + 25,
-      width: 120,
-      height: 25,
-    },
-    safe,
-    'constrained-primary',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    cta,
-    {
-      x: safe.x,
-      y: safe.y + 55,
-      width: 50,
-      height: 44,
-    },
-    safe,
-    'constrained-action',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    product,
-    {
-      x: safe.x + 55,
-      y: safe.y + 55,
-      width: 30,
-      height: 50,
-    },
-    safe,
-    'constrained-hero',
-    surface
-  );
-
-  addIfValid(
-    result,
-    occupied,
-    price,
-    {
-      x: safe.x + 90,
-      y: safe.y + 62,
-      width: 30,
-      height: 22,
-    },
-    safe,
-    'constrained-price',
-    surface
-  );
-
-  for (const element of spec.elements) {
-    if (result.has(element.id)) {
+    if (!placement) {
       continue;
     }
 
     result.set(
-      element.id,
-      dropped(
-        element,
-        'Dropped because the constrained 150x150 surface cannot safely display additional content.',
-        decision(
-          'constrained-priority-reduction',
+      candidate.element.id,
+      visibleElement(
+        candidate.element,
+        placement.rect,
+        createDecision(
+          'candidate-composition',
+          placement.attempts,
+          placement.resized,
+          placement.repositioned,
+          placement.resized ||
+            placement.repositioned
+        )
+      )
+    );
+  }
+
+  /*
+   * Keep dropped elements in the output so the Inspector
+   * can explain why they disappeared.
+   */
+  for (const droppedInfo of dropped) {
+    result.set(
+      droppedInfo.element.id,
+      droppedElement(
+        droppedInfo.element,
+        droppedInfo.reason,
+        createDecision(
+          'priority-degradation',
           1,
           true,
           false,
@@ -1047,175 +1557,31 @@ function createConstrainedLayout(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Main resolver                                                              */
+/* Final validation                                                           */
 /* -------------------------------------------------------------------------- */
 
-export function resolveLayout(
+function validateResolvedLayout(
   spec: AdSpecification,
-  surface: SurfaceProfile
-): ResolvedLayout {
-  const specErrors = validateAdSpec(spec);
-  const surfaceErrors = validateSurface(surface);
-
-  if (
-    specErrors.length > 0 ||
-    surfaceErrors.length > 0
-  ) {
-    const elements = spec.elements.map((element) =>
-      dropped(
-        element,
-        'Invalid specification or surface.',
-        decision(
-          'validation-failed',
-          0,
-          false,
-          false,
-          true
-        )
-      )
-    );
-
-    return {
-      surface,
-      elements,
-      valid: false,
-      visibleCount: 0,
-      droppedCount: elements.length,
-    };
-  }
-
-  const safe: Rect = {
-    x: surface.safeArea.left,
-    y: surface.safeArea.top,
-    width:
-      surface.width -
-      surface.safeArea.left -
-      surface.safeArea.right,
-    height:
-      surface.height -
-      surface.safeArea.top -
-      surface.safeArea.bottom,
-  };
-
-  if (
-    safe.width <= 0 ||
-    safe.height <= 0
-  ) {
-    const elements = spec.elements.map((element) =>
-      dropped(
-        element,
-        'Surface has no usable safe area.',
-        decision(
-          'invalid-safe-area',
-          0,
-          false,
-          false,
-          true
-        )
-      )
-    );
-
-    return {
-      surface,
-      elements,
-      valid: false,
-      visibleCount: 0,
-      droppedCount: elements.length,
-    };
-  }
-
-  let resolved: Map<string, ResolvedElement>;
-
-  /*
-   * The surface profile declares the composition strategy.
-   *
-   * The resolver therefore does not identify surfaces by their
-   * width/height values. Dimensions remain constraints, while
-   * layoutStrategy describes the kind of composition the surface
-   * requires.
-   *
-   * This keeps the resolution logic independent from the concrete
-   * 320x480 / 640x360 / 1920x250 / 1080x1080 / 150x150 values.
-   */
-  switch (surface.layoutStrategy) {
-    case 'portrait':
-      resolved = createPortraitLayout(spec, surface, safe);
-      break;
-
-    case 'landscape':
-      resolved = createLandscapeLayout(spec, surface, safe);
-      break;
-
-    case 'broadcast':
-      resolved = createBroadcastLayout(spec, surface, safe);
-      break;
-
-    case 'square':
-      resolved = createSquareLayout(spec, surface, safe);
-      break;
-
-    case 'constrained':
-      resolved = createConstrainedLayout(spec, surface, safe);
-      break;
-
-    default: {
-      /*
-       * Exhaustiveness guard. This should only be reachable if a new
-       * LayoutStrategy is added without adding its resolver strategy.
-       */
-      const exhaustiveCheck: never = surface.layoutStrategy;
-      throw new Error(
-        `Unsupported layout strategy: ${String(exhaustiveCheck)}`
-      );
-    }
-  }
-
-  /*
-   * Preserve original ad-spec order.
-   */
-  const elements = spec.elements.map(
-    (element) => {
-      const existing = resolved.get(element.id);
-
-      if (existing) {
-        return existing;
-      }
-
-      return dropped(
-        element,
-        'No valid placement was produced.',
-        decision(
-          'composition-fallback',
-          1,
-          true,
-          false,
-          true
-        )
-      );
-    }
-  );
-
-  const visibleElements =
+  surface: SurfaceProfile,
+  safe: Rect,
+  elements: ResolvedElement[]
+): boolean {
+  const visible =
     elements.filter(
       (element) => element.visible
     );
 
-  const visibleCount =
-    visibleElements.length;
-
-  const droppedCount =
-    elements.length - visibleCount;
+  if (visible.length === 0) {
+    return false;
+  }
 
   /*
-   * Final bounds / tap-target validation.
+   * Every visible element must stay completely
+   * inside the safe area and surface.
    */
-  let valid =
-    visibleCount > 0;
-
-  for (const element of visibleElements) {
+  for (const element of visible) {
     if (!inside(element, safe)) {
-      valid = false;
-      break;
+      return false;
     }
 
     if (
@@ -1226,18 +1592,24 @@ export function resolveLayout(
       element.y + element.height >
         surface.height
     ) {
-      valid = false;
-      break;
+      return false;
     }
 
     const specElement =
       spec.elements.find(
-        (item) => item.id === element.id
+        (item) =>
+          item.id === element.id
       );
 
+    /*
+     * Interactive elements must satisfy the
+     * surface tap-target constraint.
+     */
     if (
-      specElement?.type === 'button' &&
-      surface.minTapTarget !== undefined
+      specElement?.type ===
+        'button' &&
+      surface.minTapTarget !==
+        undefined
     ) {
       if (
         element.width <
@@ -1245,42 +1617,192 @@ export function resolveLayout(
         element.height <
           surface.minTapTarget
       ) {
-        valid = false;
-        break;
+        return false;
+      }
+    }
+
+    /*
+     * Text must satisfy the surface's minimum
+     * text-height constraint when provided.
+     */
+    if (
+      specElement?.type === 'text' &&
+      surface.minTextSize !==
+        undefined
+    ) {
+      if (
+        element.height <
+        surface.minTextSize * 1.4
+      ) {
+        return false;
       }
     }
   }
 
   /*
-   * Final overlap validation.
+   * Final pairwise overlap validation.
    */
-  if (valid) {
+  for (
+    let i = 0;
+    i < visible.length;
+    i++
+  ) {
     for (
-      let i = 0;
-      i < visibleElements.length;
-      i++
+      let j = i + 1;
+      j < visible.length;
+      j++
     ) {
-      for (
-        let j = i + 1;
-        j < visibleElements.length;
-        j++
+      if (
+        overlaps(
+          visible[i],
+          visible[j]
+        )
       ) {
-        if (
-          overlaps(
-            visibleElements[i],
-            visibleElements[j]
-          )
-        ) {
-          valid = false;
-          break;
-        }
-      }
-
-      if (!valid) {
-        break;
+        return false;
       }
     }
   }
+
+  return true;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Main resolver                                                              */
+/* -------------------------------------------------------------------------- */
+
+export function resolveLayout(
+  spec: AdSpecification,
+  surface: SurfaceProfile
+): ResolvedLayout {
+  /*
+   * Validate the typed inputs before resolving.
+   */
+  const specErrors =
+    validateAdSpec(spec);
+
+  const surfaceErrors =
+    validateSurface(surface);
+
+  if (
+    specErrors.length > 0 ||
+    surfaceErrors.length > 0
+  ) {
+    const elements =
+      spec.elements.map(
+        (element) =>
+          droppedElement(
+            element,
+            'Invalid specification or surface.',
+            createDecision(
+              'validation-failed',
+              0,
+              false,
+              false,
+              true
+            )
+          )
+      );
+
+    return {
+      surface,
+      elements,
+      valid: false,
+      visibleCount: 0,
+      droppedCount:
+        elements.length,
+    };
+  }
+
+  const safe =
+    safeRect(surface);
+
+  /*
+   * A surface must have usable space after safe-area
+   * constraints are applied.
+   */
+  if (
+    safe.width <= 0 ||
+    safe.height <= 0
+  ) {
+    const elements =
+      spec.elements.map(
+        (element) =>
+          droppedElement(
+            element,
+            'Surface has no usable safe area.',
+            createDecision(
+              'invalid-safe-area',
+              0,
+              false,
+              false,
+              true
+            )
+          )
+      );
+
+    return {
+      surface,
+      elements,
+      valid: false,
+      visibleCount: 0,
+      droppedCount:
+        elements.length,
+    };
+  }
+
+  /*
+   * The resolver adapts using geometry, element roles,
+   * constraints, candidate scoring, and priority.
+   *
+   * No surface name is inspected.
+   */
+  const resolvedMap =
+    resolveWithDegradation(
+      spec,
+      surface,
+      safe
+    );
+
+  /*
+   * Preserve original specification order for
+   * the renderer and Layout Inspector.
+   */
+  const elements =
+    spec.elements.map(
+      (element) =>
+        resolvedMap.get(
+          element.id
+        ) ??
+        droppedElement(
+          element,
+          'No valid placement was produced.',
+          createDecision(
+            'composition-fallback',
+            1,
+            false,
+            false,
+            true
+          )
+        )
+    );
+
+  const visibleCount =
+    elements.filter(
+      (element) =>
+        element.visible
+    ).length;
+
+  const droppedCount =
+    elements.length -
+    visibleCount;
+
+  const valid =
+    validateResolvedLayout(
+      spec,
+      surface,
+      safe,
+      elements
+    );
 
   return {
     surface,
